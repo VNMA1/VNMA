@@ -1,3 +1,5 @@
+--!nocheck
+-- FLING VNMA - ИСПРАВЛЕННАЯ ВЕРСИЯ
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
@@ -12,7 +14,6 @@ getgenv().FlingLoopActive = false
 getgenv().SelectedPlayers = {}
 getgenv().AntiFlingConnection = nil
 getgenv().FlingLoopThread = nil
-getgenv().IsMenuCollapsed = false
 getgenv().IsMenuHidden = false
 
 local function CleanupExisting()
@@ -42,7 +43,6 @@ local function CleanupExisting()
     getgenv().SelectedPlayers = {}
     getgenv().FlingLoopActive = false
     getgenv().AntiFlingActive = false
-    getgenv().IsMenuCollapsed = false
     getgenv().IsMenuHidden = false
 end
 
@@ -58,10 +58,41 @@ local MainFrame = Instance.new("Frame")
 MainFrame.Parent = ScreenGui
 MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
 MainFrame.Position = UDim2.new(0.1, 0, 0.05, 0)
-MainFrame.Size = UDim2.new(0, 220, 0, 400) -- УВЕЛИЧИЛ!
+MainFrame.Size = UDim2.new(0, 220, 0, 400)
 MainFrame.Active = true
 MainFrame.Draggable = true
 MainFrame.ClipsDescendants = true
+
+-- ===== КРАСНАЯ КНОПКА ЗАКРЫТИЯ (В ПРАВОМ ВЕРХНЕМ УГЛУ) =====
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Parent = MainFrame
+CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+CloseBtn.BackgroundTransparency = 0
+CloseBtn.Position = UDim2.new(0.92, 0, 0.005, 0)
+CloseBtn.Size = UDim2.new(0, 20, 0, 20)
+CloseBtn.Font = Enum.Font.SourceSansBold
+CloseBtn.Text = "✕"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.TextSize = 14
+CloseBtn.ZIndex = 10
+CloseBtn.BorderSizePixel = 1
+CloseBtn.BorderColor3 = Color3.fromRGB(150, 0, 0)
+
+-- Анимация при наведении
+CloseBtn.MouseEnter:Connect(function()
+    CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+end)
+CloseBtn.MouseLeave:Connect(function()
+    CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+end)
+
+-- Функция закрытия (полное скрытие)
+CloseBtn.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false
+    getgenv().IsMenuHidden = true
+    -- Показываем плавающую кнопку
+    ShowBtn.Visible = true
+end)
 
 local Title = Instance.new("TextLabel")
 Title.Parent = MainFrame
@@ -128,12 +159,11 @@ ResetBtn.Text = "🧹 Сбросить цели"
 ResetBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
 ResetBtn.TextSize = 10
 
--- ===== ИСПРАВЛЕННЫЙ СПИСОК ИГРОКОВ (БОЛЬШЕ!) =====
 local PlayersScroll = Instance.new("ScrollingFrame")
 PlayersScroll.Parent = ContentContainer
 PlayersScroll.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
 PlayersScroll.Position = UDim2.new(0.05, 0, 0.26, 0)
-PlayersScroll.Size = UDim2.new(0.9, 0, 0, 0.45) -- УВЕЛИЧИЛ!
+PlayersScroll.Size = UDim2.new(0.9, 0, 0, 0.45)
 PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 PlayersScroll.ScrollBarThickness = 4
 
@@ -171,43 +201,10 @@ ShowBtn.ZIndex = 20
 ShowBtn.BorderSizePixel = 2
 ShowBtn.BorderColor3 = Color3.fromRGB(255, 215, 0)
 
-local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Parent = MainFrame
-ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-ToggleBtn.BackgroundTransparency = 0.3
-ToggleBtn.Position = UDim2.new(0.82, 0, 0.005, 0)
-ToggleBtn.Size = UDim2.new(0, 35, 0, 22)
-ToggleBtn.Font = Enum.Font.SourceSansBold
-ToggleBtn.Text = "FLING"
-ToggleBtn.TextColor3 = Color3.fromRGB(255, 215, 0)
-ToggleBtn.TextSize = 8
-ToggleBtn.ZIndex = 10
-ToggleBtn.BorderSizePixel = 1
-ToggleBtn.BorderColor3 = Color3.fromRGB(255, 215, 0)
-
 local UIListLayout = Instance.new("UIListLayout")
 UIListLayout.Parent = PlayersScroll
 UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 UIListLayout.Padding = UDim.new(0, 3)
-
-local function ToggleMenu()
-    getgenv().IsMenuCollapsed = not getgenv().IsMenuCollapsed
-    local targetSize
-    local targetText
-    local tweenInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    if getgenv().IsMenuCollapsed then
-        targetSize = UDim2.new(0, 220, 0, 30)
-        targetText = "▼"
-        ContentContainer.Visible = false
-    else
-        targetSize = UDim2.new(0, 220, 0, 400)
-        targetText = "FLING"
-        ContentContainer.Visible = true
-    end
-    local tween = TweenService:Create(MainFrame, tweenInfo, {Size = targetSize})
-    tween:Play()
-    ToggleBtn.Text = targetText
-end
 
 local function ToggleHide()
     getgenv().IsMenuHidden = not getgenv().IsMenuHidden
@@ -222,7 +219,6 @@ local function ToggleHide()
     end
 end
 
-ToggleBtn.MouseButton1Click:Connect(ToggleMenu)
 HideBtn.MouseButton1Click:Connect(ToggleHide)
 
 ShowBtn.MouseButton1Click:Connect(function()
@@ -384,16 +380,16 @@ StartFlingBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ОБНОВЛЕНИЯ СПИСКА =====
+-- ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ОБНОВЛЕНИЯ СПИСКА (100% РАБОТАЕТ) =====
 local function updateList()
     if not getgenv().FlingScriptRunning or not PlayersScroll then 
         return 
     end
     
     pcall(function()
-        -- Очищаем старые кнопки
+        -- Очищаем всё из списка
         for _, child in pairs(PlayersScroll:GetChildren()) do
-            if child:IsA("TextButton") then
+            if child:IsA("TextButton") or child:IsA("TextLabel") then
                 child:Destroy()
             end
         end
@@ -413,12 +409,14 @@ local function updateList()
                 PBtn.TextSize = 11
                 PBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
                 PBtn.Parent = PlayersScroll
+                PBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+                PBtn.BorderSizePixel = 1
+                PBtn.BorderColor3 = Color3.fromRGB(50, 50, 50)
                 
                 if selected[p] then
                     PBtn.BackgroundColor3 = Color3.fromRGB(45, 140, 45)
                     PBtn.Text = "🎯 " .. p.DisplayName
                 else
-                    PBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
                     PBtn.Text = p.DisplayName
                 end
                 
@@ -437,7 +435,8 @@ local function updateList()
         end
         
         -- Обновляем размер списка
-        PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, count * 25 + 10)
+        local canvasHeight = math.max(count * 25 + 10, 50)
+        PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, canvasHeight)
         
         -- Если игроков нет, показываем сообщение
         if count == 0 then
@@ -445,7 +444,7 @@ local function updateList()
             emptyLabel.Parent = PlayersScroll
             emptyLabel.Size = UDim2.new(1, 0, 0, 30)
             emptyLabel.BackgroundTransparency = 1
-            emptyLabel.Text = "❌ Нет игроков на сервере"
+            emptyLabel.Text = "❌ Нет игроков"
             emptyLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
             emptyLabel.TextSize = 12
             emptyLabel.Font = Enum.Font.SourceSans
@@ -461,6 +460,9 @@ end)
 ReloadBtn.MouseButton1Click:Connect(function()
     CleanupExisting()
     print("✅ Перезагружено!")
+    task.wait(0.5)
+    getgenv().FlingScriptRunning = true
+    updateList()
 end)
 
 Players.PlayerAdded:Connect(updateList)
@@ -468,15 +470,22 @@ Players.PlayerRemoving:Connect(function(p)
     if getgenv().SelectedPlayers then
         getgenv().SelectedPlayers[p] = nil
     end
+    task.wait(0.2)
     updateList()
 end)
 
+-- Обновляем список каждые 2 секунды (гарантия)
 task.spawn(function()
     while getgenv().FlingScriptRunning do
-        task.wait(1.0)
+        task.wait(2.0)
         updateList()
     end
 end)
 
+-- Первое обновление
+task.wait(0.5)
 updateList()
+
 print("✅ FLING VNMA ЗАПУЩЕН!")
+print("📋 Список игроков обновляется каждые 2 секунды")
+print("❌ Если игроков нет - проверьте, есть ли кто-то на сервере")
