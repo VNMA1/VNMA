@@ -1,5 +1,5 @@
 --!nocheck
--- FLING VNMA - ИСПРАВЛЕННАЯ ВЕРСИЯ
+-- FLING VNMA - ИСПРАВЛЕННАЯ ВЕРСИЯ С ОТЛАДКОЙ
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
@@ -63,7 +63,7 @@ MainFrame.Active = true
 MainFrame.Draggable = true
 MainFrame.ClipsDescendants = true
 
--- ===== КРАСНАЯ КНОПКА ЗАКРЫТИЯ (В ПРАВОМ ВЕРХНЕМ УГЛУ) =====
+-- КРАСНАЯ КНОПКА ЗАКРЫТИЯ
 local CloseBtn = Instance.new("TextButton")
 CloseBtn.Parent = MainFrame
 CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
@@ -78,7 +78,6 @@ CloseBtn.ZIndex = 10
 CloseBtn.BorderSizePixel = 1
 CloseBtn.BorderColor3 = Color3.fromRGB(150, 0, 0)
 
--- Анимация при наведении
 CloseBtn.MouseEnter:Connect(function()
     CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
 end)
@@ -86,11 +85,9 @@ CloseBtn.MouseLeave:Connect(function()
     CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
 end)
 
--- Функция закрытия (полное скрытие)
 CloseBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = false
     getgenv().IsMenuHidden = true
-    -- Показываем плавающую кнопку
     ShowBtn.Visible = true
 end)
 
@@ -380,28 +377,42 @@ StartFlingBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- ===== ИСПРАВЛЕННАЯ ФУНКЦИЯ ОБНОВЛЕНИЯ СПИСКА (100% РАБОТАЕТ) =====
+-- ===== НОВАЯ ФУНКЦИЯ ОБНОВЛЕНИЯ СПИСКА (С ОТЛАДКОЙ) =====
 local function updateList()
-    if not getgenv().FlingScriptRunning or not PlayersScroll then 
+    if not getgenv().FlingScriptRunning then 
+        print("⚠️ Скрипт остановлен, список не обновляется")
         return 
     end
     
+    if not PlayersScroll then
+        print("❌ PlayersScroll не найден!")
+        return
+    end
+    
     pcall(function()
-        -- Очищаем всё из списка
+        -- Очищаем старые кнопки
+        local childrenToRemove = {}
         for _, child in pairs(PlayersScroll:GetChildren()) do
             if child:IsA("TextButton") or child:IsA("TextLabel") then
-                child:Destroy()
+                table.insert(childrenToRemove, child)
             end
+        end
+        for _, child in pairs(childrenToRemove) do
+            child:Destroy()
         end
         
         local selected = getgenv().SelectedPlayers or {}
         local players = Players:GetPlayers()
         local count = 0
         
+        print("📋 Найдено игроков на сервере: " .. #players)
+        
         -- Создаём кнопки для каждого игрока
         for _, p in pairs(players) do
             if p ~= LocalPlayer and p.Parent then
                 count = count + 1
+                print("✅ Добавлен игрок: " .. p.Name .. " (" .. p.DisplayName .. ")")
+                
                 local PBtn = Instance.new("TextButton")
                 PBtn.Name = p.Name
                 PBtn.Size = UDim2.new(1, 0, 0, 22)
@@ -425,8 +436,10 @@ local function updateList()
                         local sel = getgenv().SelectedPlayers
                         if sel[p] then
                             sel[p] = nil
+                            print("❌ Удалён из целей: " .. p.Name)
                         else
                             sel[p] = true
+                            print("✅ Добавлен в цели: " .. p.Name)
                         end
                         updateList()
                     end
@@ -440,44 +453,55 @@ local function updateList()
         
         -- Если игроков нет, показываем сообщение
         if count == 0 then
+            print("⚠️ Нет других игроков на сервере!")
             local emptyLabel = Instance.new("TextLabel")
             emptyLabel.Parent = PlayersScroll
             emptyLabel.Size = UDim2.new(1, 0, 0, 30)
             emptyLabel.BackgroundTransparency = 1
-            emptyLabel.Text = "❌ Нет игроков"
+            emptyLabel.Text = "❌ Нет других игроков"
             emptyLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
             emptyLabel.TextSize = 12
             emptyLabel.Font = Enum.Font.SourceSans
+        else
+            print("✅ Список обновлён! Всего игроков: " .. count)
         end
     end)
 end
 
 ResetBtn.MouseButton1Click:Connect(function()
     getgenv().SelectedPlayers = {}
+    print("🧹 Список целей сброшен")
     updateList()
 end)
 
 ReloadBtn.MouseButton1Click:Connect(function()
+    print("🔄 Перезагрузка...")
     CleanupExisting()
-    print("✅ Перезагружено!")
     task.wait(0.5)
     getgenv().FlingScriptRunning = true
     updateList()
+    print("✅ Перезагружено!")
 end)
 
-Players.PlayerAdded:Connect(updateList)
-Players.PlayerRemoving:Connect(function(p)
-    if getgenv().SelectedPlayers then
-        getgenv().SelectedPlayers[p] = nil
-    end
-    task.wait(0.2)
+Players.PlayerAdded:Connect(function(p)
+    print("➕ Игрок зашёл: " .. p.Name)
+    task.wait(0.3)
     updateList()
 end)
 
--- Обновляем список каждые 2 секунды (гарантия)
+Players.PlayerRemoving:Connect(function(p)
+    print("➖ Игрок вышел: " .. p.Name)
+    if getgenv().SelectedPlayers then
+        getgenv().SelectedPlayers[p] = nil
+    end
+    task.wait(0.3)
+    updateList()
+end)
+
+-- Обновляем список каждые 3 секунды (гарантия)
 task.spawn(function()
     while getgenv().FlingScriptRunning do
-        task.wait(2.0)
+        task.wait(3.0)
         updateList()
     end
 end)
@@ -487,5 +511,5 @@ task.wait(0.5)
 updateList()
 
 print("✅ FLING VNMA ЗАПУЩЕН!")
-print("📋 Список игроков обновляется каждые 2 секунды")
-print("❌ Если игроков нет - проверьте, есть ли кто-то на сервере")
+print("📋 Список игроков обновляется каждые 3 секунды")
+print("🔍 Смотри в консоль (F9) для отладки")
