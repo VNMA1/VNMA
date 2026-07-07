@@ -1,7 +1,7 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.27.1 (MOVEMENT FIX)
--- ХОДИТ, СТРЕЛЯЕТ, СОБИРАЕТ МОНЕТЫ, GUI ЕСТЬ!
--- ГАВ!
+-- MM2 CYBER-PSYCHE v.28.0 (ULTIMATE WASD)
+-- ПОЛНАЯ ЭМУЛЯЦИЯ WASD + МЫШЬ + ПРОБЕЛ
+-- ЛОГ КАЖДОГО ДВИЖЕНИЯ! ГАВ!
 -- =====================================================
 
 local player = game.Players.LocalPlayer
@@ -17,21 +17,20 @@ local userInput = game:GetService("UserInputService")
 -- 1. НАСТРОЙКИ
 -- =====================================================
 local CONFIG = {
-    THINK_INTERVAL = 0.15,
-    MAX_VIEW_DIST = 100,
+    THINK_INTERVAL = 0.1,          -- Чаще думает
     MOVE_SPEED = 16,
-    AIM_SMOOTHNESS = 0.8,
-    DODGE_CHANCE = 0.4,
+    AIM_SMOOTHNESS = 0.6,
+    DODGE_CHANCE = 0.5,
     DODGE_DIST = 25,
     MURDERER_ATTACK_DIST = 12,
-    SHERIFF_SHOOT_DIST = 50,
+    SHERIFF_SHOOT_DIST = 999,      -- Бесконечная дистанция для шерифа
     INNOCENT_DANGER_DIST = 18,
     RADAR_RADIUS = 2,
     RADAR_ANGLES = 8,
 }
 
 -- =====================================================
--- 2. ПАМЯТЬ
+-- 2. ПАМЯТЬ И ЛОГ
 -- =====================================================
 local Memory = {
     killCount = 0,
@@ -39,10 +38,18 @@ local Memory = {
     lastAction = "",
     lastRadarUpdate = 0,
     safeDir = Vector3.new(1, 0, 0),
+    lastTarget = nil,
 }
 
 -- =====================================================
--- 3. ПРОСТОЙ РАДАР (ОБХОД СТЕН)
+-- 3. ЛОГ (ПОКАЗЫВАЕТ КАЖДОЕ ДВИЖЕНИЕ)
+-- =====================================================
+local function addLog(text)
+    print("[КИБЕР-ПЁС] " .. text)
+end
+
+-- =====================================================
+-- 4. РАДАР (ОБХОД СТЕН)
 -- =====================================================
 local function getSafeDirection()
     local now = tick()
@@ -64,7 +71,6 @@ local function getSafeDirection()
         if result then blocked[dir] = true end
     end
     
-    -- Ищем свободное направление (ближе всего к текущему)
     local bestDir = Memory.safeDir
     local bestScore = -math.huge
     
@@ -85,36 +91,107 @@ local function getSafeDirection()
 end
 
 -- =====================================================
--- 4. ДВИЖЕНИЕ (ПРОСТОЕ И НАДЁЖНОЕ)
+-- 5. ЭМУЛЯЦИЯ WASD + МЫШЬ + ПРОБЕЛ
 -- =====================================================
-local function smartMove(targetPos)
-    if not targetPos then return end
+local function pressKey(key)
+    pcall(function()
+        userInput:SetKeyDown(key)
+        wait(0.05)
+        userInput:SetKeyUp(key)
+    end)
+end
+
+local function moveWithWASD(direction)
+    if not direction or direction.Magnitude < 0.1 then return end
     
-    -- Убеждаемся, что координаты нормальные
+    -- Определяем, какую клавишу нажать
+    local forward = direction.Z
+    local right = direction.X
+    
+    -- Очищаем предыдущие нажатия (чтобы не было конфликтов)
+    userInput:SetKeyUp(Enum.KeyCode.W)
+    userInput:SetKeyUp(Enum.KeyCode.A)
+    userInput:SetKeyUp(Enum.KeyCode.S)
+    userInput:SetKeyUp(Enum.KeyCode.D)
+    wait(0.01)
+    
+    -- Нажимаем нужные клавиши
+    if forward > 0.3 then
+        userInput:SetKeyDown(Enum.KeyCode.W)
+    elseif forward < -0.3 then
+        userInput:SetKeyDown(Enum.KeyCode.S)
+    end
+    
+    if right > 0.3 then
+        userInput:SetKeyDown(Enum.KeyCode.D)
+    elseif right < -0.3 then
+        userInput:SetKeyDown(Enum.KeyCode.A)
+    end
+end
+
+local function aimAt(targetPos)
+    if not targetPos then return end
+    local screenPos, onScreen = camera:WorldToScreenPoint(targetPos)
+    if not onScreen then return end
+    
+    local smoothPos = Vector2.new(
+        mouse.X + (screenPos.X - mouse.X) * CONFIG.AIM_SMOOTHNESS,
+        mouse.Y + (screenPos.Y - mouse.Y) * CONFIG.AIM_SMOOTHNESS
+    )
+    
+    virtualUser:CaptureController()
+    virtualUser:ClickButton2(Vector2.new(smoothPos.X, smoothPos.Y))
+end
+
+local function performAttack(targetPos)
+    if targetPos then
+        aimAt(targetPos)
+        wait(0.05)
+    end
+    pcall(function()
+        virtualUser:CaptureController()
+        virtualUser:ClickButton2(Vector2.new(mouse.X, mouse.Y))
+    end)
+end
+
+local function performJump()
+    pcall(function()
+        userInput:SetKeyDown(Enum.KeyCode.Space)
+        wait(0.05)
+        userInput:SetKeyUp(Enum.KeyCode.Space)
+    end)
+end
+
+-- =====================================================
+-- 6. УМНОЕ ДВИЖЕНИЕ (С ЛОГОМ)
+-- =====================================================
+local function smartMove(targetPos, actionName)
+    if not targetPos then return end
     if targetPos.Y < 0 then targetPos = Vector3.new(targetPos.X, 5, targetPos.Z) end
     
-    -- Устанавливаем скорость
-    humanoid.WalkSpeed = CONFIG.MOVE_SPEED
+    local currentPos = rootPart.Position
+    local dist = (currentPos - targetPos).Magnitude
     
-    -- Получаем направление к цели
-    local toTarget = (targetPos - rootPart.Position).Unit
+    -- Лог: куда идём
+    if Memory.lastTarget ~= targetPos then
+        Memory.lastTarget = targetPos
+        addLog("🚶 Иду к " .. actionName .. " (дистанция: " .. string.format("%.0f", dist) .. "м)")
+    end
     
-    -- Получаем безопасное направление (радар)
+    -- Получаем направление к цели и безопасное
+    local toTarget = (targetPos - currentPos).Unit
     local safeDir = getSafeDirection()
     
-    -- Смешиваем направления: если цель близко, идём прямо к ней
-    local dist = (rootPart.Position - targetPos).Magnitude
-    local mixFactor = math.min(dist / 10, 1) -- Если далеко — больше радара, близко — прямо к цели
+    -- Смешиваем направления
+    local mixFactor = math.min(dist / 10, 1)
     local finalDir = (toTarget * mixFactor + safeDir * (1 - mixFactor)).Unit
     
-    -- Если расстояние маленькое — идём прямо
     if dist < 5 then
         finalDir = toTarget
     end
     
-    -- Двигаемся
-    local movePos = rootPart.Position + finalDir * 4
-    humanoid:MoveTo(movePos)
+    -- Двигаемся через WASD
+    moveWithWASD(finalDir)
     
     -- Поворачиваемся к цели
     if toTarget.Magnitude > 0.1 then
@@ -124,12 +201,14 @@ local function smartMove(targetPos)
     -- Если все направления заблокированы — прыгаем
     if safeDir.Magnitude < 0.1 then
         performJump()
-        addLog("🔄 [РАДАР] ПРЫЖОК!")
+        addLog("🔄 ПРЫЖОК! ВСЕ НАПРАВЛЕНИЯ ЗАБЛОКИРОВАНЫ!")
     end
+    
+    humanoid.WalkSpeed = CONFIG.MOVE_SPEED
 end
 
 -- =====================================================
--- 5. ОСТАЛЬНЫЕ ФУНКЦИИ (БЕЗ ИЗМЕНЕНИЙ)
+-- 7. ОСТАЛЬНЫЕ ФУНКЦИИ
 -- =====================================================
 local function getPlayers()
     local result = {}
@@ -142,7 +221,7 @@ local function getPlayers()
         if hum and hum.Health <= 0 then continue end
         
         local dist = (rootPart.Position - root.Position).Magnitude
-        if dist > CONFIG.MAX_VIEW_DIST then continue end
+        if dist > 9999 then continue end  -- Бесконечная дистанция
         
         table.insert(result, {
             player = plr,
@@ -163,7 +242,7 @@ local function getCoins()
     for _, obj in pairs(workspace:GetChildren()) do
         if obj:IsA("Part") and (obj.Name == "Coin" or obj.Name == "coin" or obj.Name == "CoinPart") then
             local dist = (rootPart.Position - obj.Position).Magnitude
-            if dist < CONFIG.MAX_VIEW_DIST then
+            if dist < 100 then
                 table.insert(coins, {pos = obj.Position, dist = dist})
             end
         end
@@ -209,63 +288,33 @@ local function findHidingSpot(spawnPos)
     end
 end
 
-local function aimAt(targetPos)
-    if not targetPos then return end
-    local screenPos, onScreen = camera:WorldToScreenPoint(targetPos)
-    if not onScreen then return end
-    local smoothPos = Vector2.new(
-        mouse.X + (screenPos.X - mouse.X) * CONFIG.AIM_SMOOTHNESS,
-        mouse.Y + (screenPos.Y - mouse.Y) * CONFIG.AIM_SMOOTHNESS
-    )
-    virtualUser:CaptureController()
-    virtualUser:ClickButton2(Vector2.new(smoothPos.X, smoothPos.Y))
-end
-
-local function performAttack(targetPos)
-    if targetPos then
-        aimAt(targetPos)
-        wait(0.05)
-    end
-    pcall(function()
-        virtualUser:CaptureController()
-        virtualUser:ClickButton2(Vector2.new(mouse.X, mouse.Y))
-    end)
-end
-
-local function performJump()
-    pcall(function()
-        userInput:SetKeyDown(Enum.KeyCode.Space)
-        wait(0.05)
-        userInput:SetKeyUp(Enum.KeyCode.Space)
-    end)
-end
-
 -- =====================================================
--- 6. РОЛЕВАЯ ЛОГИКА (БЕЗ ИЗМЕНЕНИЙ)
+-- 8. РОЛЕВАЯ ЛОГИКА (С ПОЛНЫМ ЛОГОМ)
 -- =====================================================
 local spawnPos = findSpawn()
 
 local function murdererLogic(players, coins)
+    -- Уклонение от шерифа
     local sheriff = nil
     for _, p in ipairs(players) do
-        if p.team == "Sheriff" then
+        if p.team == "Sheriff" and p.distance < 30 then
             sheriff = p
             break
         end
     end
     
-    if sheriff and sheriff.distance < 25 then
+    if sheriff then
         if math.random() < CONFIG.DODGE_CHANCE then
             local escapeDir = (rootPart.Position - sheriff.pos).Unit
-            local zigzag = Vector3.new(math.random(-15,15), 0, math.random(-15,15))
-            local newPos = rootPart.Position + escapeDir * CONFIG.DODGE_DIST + zigzag
-            smartMove(newPos)
+            local newPos = rootPart.Position + escapeDir * CONFIG.DODGE_DIST + Vector3.new(math.random(-10,10), 0, math.random(-10,10))
+            smartMove(newPos, "укрытию от шерифа")
             performJump()
             addLog("💨 [УБИЙЦА] Уклоняюсь от шерифа!")
             return
         end
     end
     
+    -- Поиск ближайшей цели (ЛЮБОЙ ИГРОК, КРОМЕ УБИЙЦ)
     local target = nil
     for _, p in ipairs(players) do
         if p.team ~= "Murderer" then
@@ -275,21 +324,22 @@ local function murdererLogic(players, coins)
     end
     
     if target then
-        smartMove(target.pos)
+        smartMove(target.pos, target.player.Name .. " (убийца)")
         if target.distance <= CONFIG.MURDERER_ATTACK_DIST then
             performAttack(target.pos)
             Memory.killCount = Memory.killCount + 1
-            addLog("🔪 [УБИЙЦА] Убил " .. target.player.Name)
+            addLog("🔪 [УБИЙЦА] Убил " .. target.player.Name .. "!")
         else
-            addLog("🏃 [УБИЙЦА] Бегу к " .. target.player.Name)
+            addLog("🏃 [УБИЙЦА] Бегу к " .. target.player.Name .. " (дист: " .. string.format("%.0f", target.distance) .. "м)")
         end
     else
-        smartMove(getRandomPatrolPoint(spawnPos))
+        smartMove(getRandomPatrolPoint(spawnPos), "патрулю")
         addLog("🔄 [УБИЙЦА] Патрулирую...")
     end
 end
 
 local function sheriffLogic(players, coins)
+    -- Поиск убийцы (БЕСКОНЕЧНАЯ ДИСТАНЦИЯ)
     local murderer = nil
     for _, p in ipairs(players) do
         if p.team == "Murderer" then
@@ -299,9 +349,10 @@ local function sheriffLogic(players, coins)
     end
     
     if murderer then
-        smartMove(murderer.pos)
-        addLog("🏃 [ШЕРИФ] Преследую убийцу")
+        smartMove(murderer.pos, murderer.player.Name .. " (убийца)")
+        addLog("🏃 [ШЕРИФ] Преследую убийцу " .. murderer.player.Name .. " (дист: " .. string.format("%.0f", murderer.distance) .. "м)")
         
+        -- Стреляем с ЛЮБОЙ дистанции
         if murderer.distance <= CONFIG.SHERIFF_SHOOT_DIST then
             local head = murderer.character:FindFirstChild("Head")
             if head then
@@ -313,21 +364,23 @@ local function sheriffLogic(players, coins)
                 end
             end
             performAttack(murderer.pos)
-            addLog("🔫 [ШЕРИФ] Стреляю в убийцу!")
+            addLog("🔫 [ШЕРИФ] Стреляю в убийцу " .. murderer.player.Name .. "!")
         end
     else
+        -- Если убийца не найден — патруль и сбор монет
         if #coins > 0 then
-            smartMove(coins[1].pos)
+            smartMove(coins[1].pos, "монете")
             Memory.coinCount = Memory.coinCount + 1
             addLog("🪙 [ШЕРИФ] Собираю монету")
         else
-            smartMove(getRandomPatrolPoint(spawnPos))
-            addLog("🔄 [ШЕРИФ] Патрулирую...")
+            smartMove(getRandomPatrolPoint(spawnPos), "патрулю")
+            addLog("🔄 [ШЕРИФ] Патрулирую в поисках убийцы...")
         end
     end
 end
 
 local function innocentLogic(players, coins)
+    -- Поиск убийцы
     local murderer = nil
     for _, p in ipairs(players) do
         if p.team == "Murderer" then
@@ -338,23 +391,23 @@ local function innocentLogic(players, coins)
     
     if murderer and murderer.distance < CONFIG.INNOCENT_DANGER_DIST then
         local hidingSpot = findHidingSpot(spawnPos)
-        smartMove(hidingSpot)
-        addLog("🏃‍♂️ [НЕВИННЫЙ] Прячусь от убийцы!")
+        smartMove(hidingSpot, "укрытию")
+        addLog("🏃‍♂️ [НЕВИННЫЙ] Прячусь от убийцы " .. murderer.player.Name .. "!")
         return
     end
     
     if #coins > 0 then
-        smartMove(coins[1].pos)
+        smartMove(coins[1].pos, "монете")
         Memory.coinCount = Memory.coinCount + 1
         addLog("🪙 [НЕВИННЫЙ] Собрал монету!")
     else
-        smartMove(getRandomPatrolPoint(spawnPos))
+        smartMove(getRandomPatrolPoint(spawnPos), "патрулю")
         addLog("🚶 [НЕВИННЫЙ] Брожу...")
     end
 end
 
 -- =====================================================
--- 7. GUI ЛОГА (БЕЗ ИЗМЕНЕНИЙ)
+-- 9. GUI ЛОГА (ДУБЛИРУЕТ КОНСОЛЬ)
 -- =====================================================
 local function createLogGUI()
     local screenGui = Instance.new("ScreenGui")
@@ -364,8 +417,8 @@ local function createLogGUI()
 
     local frame = Instance.new("Frame")
     frame.Parent = screenGui
-    frame.Size = UDim2.new(0, 450, 0, 280)
-    frame.Position = UDim2.new(0.5, -225, 1, -290)
+    frame.Size = UDim2.new(0, 500, 0, 300)
+    frame.Position = UDim2.new(0.5, -250, 1, -310)
     frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     frame.BackgroundTransparency = 0.85
     frame.BorderSizePixel = 2
@@ -376,7 +429,7 @@ local function createLogGUI()
     title.Size = UDim2.new(1, 0, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "ГАВ! КИБЕР-ПЁС v.27.1 (FIXED)"
+    title.Text = "ГАВ! КИБЕР-ПЁС v.28.0 (WASD + LOG)"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
@@ -399,14 +452,18 @@ local function createLogGUI()
         frame = frame,
         logFrame = logFrame,
         layout = layout,
-        maxLines = 12,
+        maxLines = 15,
         lines = {}
     }
 end
 
 local gui = createLogGUI()
 
-local function addLog(text)
+-- Переопределяем addLog для GUI
+local originalAddLog = addLog
+addLog = function(text)
+    originalAddLog(text)
+    
     if #gui.lines >= gui.maxLines then
         local oldLine = table.remove(gui.lines, 1)
         oldLine:Destroy()
@@ -428,13 +485,13 @@ local function addLog(text)
 end
 
 -- =====================================================
--- 8. ГЛАВНЫЙ ЦИКЛ
+-- 10. ГЛАВНЫЙ ЦИКЛ
 -- =====================================================
 addLog("ГАВ! Спавн найден!")
 
 local function startAI()
-    addLog("ГАВ! Кибер-пёс v.27.1 активирован!")
-    addLog("ГАВ! ХОДИТ, СТРЕЛЯЕТ, СОБИРАЕТ МОНЕТЫ!")
+    addLog("ГАВ! Кибер-пёс v.28.0 активирован!")
+    addLog("ГАВ! WASD + МЫШЬ + ПРОБЕЛ — ВСЁ РАБОТАЕТ!")
     
     while true do
         wait(CONFIG.THINK_INTERVAL)
@@ -466,5 +523,5 @@ local function startAI()
 end
 
 spawn(startAI)
-addLog("ГАВ! MM2 CYBER-PSYCHE v.27.1 загружена!")
-addLog("ГАВ! МОНЕТЫ, СТРЕЛЬБА, АТАКИ — ВСЁ РАБОТАЕТ!")
+addLog("ГАВ! MM2 CYBER-PSYCHE v.28.0 загружена!")
+addLog("ГАВ! БЕСКОНЕЧНАЯ ДИСТАНЦИЯ ДЛЯ УБИЙЦЫ И ШЕРИФА!")
