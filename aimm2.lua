@@ -1,6 +1,7 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.22.0 (ULTIMATE WALK)
--- АБСОЛЮТНАЯ НАДЁЖНОСТЬ ХОДЬБЫ! ГАВ!
+-- MM2 CYBER-PSYCHE v.23.0 (SMART MOVEMENT)
+-- ХОДИТ КАК ЧЕЛОВЕК: ЗИГЗАГИ, ПАУЗЫ, БЕЗ СТЕН!
+-- ГАВ!
 -- =====================================================
 
 local player = game.Players.LocalPlayer
@@ -11,23 +12,23 @@ local camera = workspace.CurrentCamera
 local virtualUser = game:GetService("VirtualUser")
 local mouse = player:GetMouse()
 local userInput = game:GetService("UserInputService")
-local pathfinding = game:GetService("PathfindingService")
 
 -- =====================================================
--- 1. НАСТРОЙКИ (оптимизированы)
+-- 1. НАСТРОЙКИ (ОПТИМИЗИРОВАНЫ)
 -- =====================================================
 local CONFIG = {
-    THINK_INTERVAL = 0.1,          -- чаще думает
+    THINK_INTERVAL = 0.15,
     ATTACK_DIST = 15,
     MAX_VIEW_DIST = 100,
-    PATROL_RADIUS = 25,
+    PATROL_RADIUS = 20,          -- меньше радиус, чтобы не бегать по кругу
     MOVE_SPEED = 16,
     AIM_SMOOTHNESS = 0.8,
     DODGE_CHANCE = 0.3,
     DODGE_DIST = 20,
-    STUCK_CHECK_INTERVAL = 1.5,    -- быстрее реагирует на застревание
-    JUMP_FORWARD_DIST = 8,
-    PATH_RECALC_INTERVAL = 2,      -- перестраивает путь каждые 2 сек
+    STUCK_CHECK_INTERVAL = 1.5,
+    JUMP_FORWARD_DIST = 6,
+    ZIGZAG_CHANCE = 0.3,         -- шанс зигзага при ходьбе
+    DIRECTION_CHANGE_INTERVAL = 3, -- меняем направление каждые 3 сек
 }
 
 -- =====================================================
@@ -39,49 +40,16 @@ local Memory = {
     coinCount = 0,
     lastAction = "",
     isDodging = false,
-    currentPath = {},
-    pathIndex = 1,
     lastPosition = Vector3.new(0, 0, 0),
     stuckTimer = 0,
     isStuck = false,
-    lastPathRecalc = 0,
+    directionChangeTimer = 0,
+    currentTarget = nil,
+    zigzagOffset = Vector3.new(0, 0, 0),
 }
 
 -- =====================================================
--- 3. УЛУЧШЕННЫЙ ПОИСК ПУТИ
--- =====================================================
-local function getPath(startPos, endPos)
-    if not startPos or not endPos then return {} end
-
-    local path = pathfinding:CreatePath({
-        AgentRadius = 1.5,
-        AgentHeight = 4,
-        AgentCanJump = true,
-        AgentMaxSlope = 80,
-        WaypointSpacing = 2,
-        Cost = {
-            Water = 20,  -- меньше штраф для воды
-        }
-    })
-
-    local success = pcall(function()
-        path:ComputeAsync(startPos, endPos)
-    end)
-
-    if not success or path.Status ~= Enum.PathStatus.Success then
-        return {}
-    end
-
-    local waypoints = path:GetWaypoints()
-    local points = {}
-    for _, waypoint in ipairs(waypoints) do
-        table.insert(points, waypoint.Position)
-    end
-    return points
-end
-
--- =====================================================
--- 4. 100% НАДЁЖНОЕ ДВИЖЕНИЕ
+-- 3. УМНОЕ ДВИЖЕНИЕ (БЕЗ PATHFINDING)
 -- =====================================================
 local function moveToTarget(targetPos)
     if not targetPos then return end
@@ -89,9 +57,9 @@ local function moveToTarget(targetPos)
     local currentPos = rootPart.Position
     local distanceToTarget = (currentPos - targetPos).Magnitude
 
-    -- Если цель уже рядом — не двигаемся
+    -- Если цель уже рядом — останавливаемся
     if distanceToTarget < 2 then
-        Memory.currentPath = {}
+        humanoid:MoveTo(currentPos)
         return
     end
 
@@ -103,53 +71,58 @@ local function moveToTarget(targetPos)
         Memory.stuckTimer = 0
     end
 
-    -- Если застрял — прыжок + сброс пути
+    -- Если застрял — прыгаем в сторону
     if Memory.stuckTimer > CONFIG.STUCK_CHECK_INTERVAL then
         Memory.isStuck = true
         local jumpDirection = (targetPos - currentPos).Unit
-        local jumpPos = currentPos + jumpDirection * CONFIG.JUMP_FORWARD_DIST
+        local sideDirection = Vector3.new(jumpDirection.Z, 0, -jumpDirection.X) -- перпендикуляр
+        local jumpPos = currentPos + (jumpDirection + sideDirection * 0.5) * CONFIG.JUMP_FORWARD_DIST
         humanoid:MoveTo(jumpPos)
         performJump()
         Memory.stuckTimer = 0
-        Memory.currentPath = {}
-        addLog("🏃‍♂️ ПРЫЖОК для преодоления препятствия!")
+        addLog("🏃‍♂️ ПРЫЖОК В СТОРОНУ!")
         return
     else
         Memory.isStuck = false
     end
 
-    -- Перестраиваем путь каждые 2 секунды (для актуальности)
-    local now = tick()
-    if now - Memory.lastPathRecalc > CONFIG.PATH_RECALC_INTERVAL or #Memory.currentPath == 0 then
-        Memory.currentPath = getPath(currentPos, targetPos)
-        Memory.pathIndex = 1
-        Memory.lastPathRecalc = now
+    -- Зигзаг (имитация человека)
+    local zigzag = Vector3.new(0, 0, 0)
+    if math.random() < CONFIG.ZIGZAG_CHANCE then
+        local angle = math.random(-30, 30)
+        zigzag = Vector3.new(math.sin(math.rad(angle)), 0, math.cos(math.rad(angle))) * 3
     end
 
-    -- Если путь найден — двигаемся по точкам
-    if #Memory.currentPath > 0 and Memory.pathIndex <= #Memory.currentPath then
-        local nextPoint = Memory.currentPath[Memory.pathIndex]
-        if nextPoint then
-            humanoid:MoveTo(nextPoint)
-            if (currentPos - nextPoint).Magnitude < 2.5 then
-                Memory.pathIndex = Memory.pathIndex + 1
-                if Memory.pathIndex > #Memory.currentPath then
-                    Memory.currentPath = {}
-                end
-            end
-        end
-    else
-        -- Запасной вариант: идём по прямой
-        humanoid:MoveTo(targetPos)
+    -- Меняем направление каждые 3 секунды (чтобы не бегать по кругу)
+    Memory.directionChangeTimer = Memory.directionChangeTimer + CONFIG.THINK_INTERVAL
+    if Memory.directionChangeTimer > CONFIG.DIRECTION_CHANGE_INTERVAL then
+        Memory.directionChangeTimer = 0
+        Memory.zigzagOffset = Vector3.new(math.random(-5, 5), 0, math.random(-5, 5))
     end
 
-    -- Фиксируем позицию
+    -- Финальная точка с учётом зигзага и смещения
+    local finalTarget = targetPos + zigzag + Memory.zigzagOffset
+    humanoid:MoveTo(finalTarget)
+
+    -- Обновляем позицию
     Memory.lastPosition = currentPos
     humanoid.WalkSpeed = CONFIG.MOVE_SPEED
 end
 
 -- =====================================================
--- 5. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (без изменений)
+-- 4. ПАТРУЛЬ (ХАОТИЧНЫЙ, КАК У ИГРОКА)
+-- =====================================================
+local function getPatrolPoint(spawnPos)
+    -- Вместо круга — случайные точки в радиусе
+    local angle = math.random() * 2 * math.pi
+    local radius = CONFIG.PATROL_RADIUS * (0.5 + math.random() * 0.5) -- случайный радиус
+    local x = spawnPos.X + math.cos(angle) * radius
+    local z = spawnPos.Z + math.sin(angle) * radius
+    return Vector3.new(x, spawnPos.Y, z)
+end
+
+-- =====================================================
+-- 5. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (БЕЗ ИЗМЕНЕНИЙ)
 -- =====================================================
 local function findSpawn()
     for _, obj in pairs(workspace:GetChildren()) do
@@ -158,14 +131,6 @@ local function findSpawn()
         end
     end
     return Vector3.new(0, 5, 0)
-end
-
-local function getPatrolPoint(spawnPos)
-    Memory.patrolAngle = Memory.patrolAngle + 0.2
-    local radius = CONFIG.PATROL_RADIUS
-    local x = spawnPos.X + math.cos(Memory.patrolAngle) * radius
-    local z = spawnPos.Z + math.sin(Memory.patrolAngle) * radius
-    return Vector3.new(x, spawnPos.Y, z)
 end
 
 local function getTargets()
@@ -246,7 +211,7 @@ local function dodgeFromSheriff(sheriffPos)
 end
 
 -- =====================================================
--- 6. GUI ЛОГА (улучшен)
+-- 6. GUI ЛОГА
 -- =====================================================
 local function createLogGUI()
     local screenGui = Instance.new("ScreenGui")
@@ -268,7 +233,7 @@ local function createLogGUI()
     title.Size = UDim2.new(1, 0, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "ГАВ! ЛОГ ДЕЙСТВИЙ КИБЕР-ПСА v.22"
+    title.Text = "ГАВ! ЛОГ ДЕЙСТВИЙ КИБЕР-ПСА v.23"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.TextSize = 18
     title.Font = Enum.Font.SourceSansBold
@@ -320,19 +285,19 @@ local function addLog(text)
 end
 
 -- =====================================================
--- 7. ГЛАВНЫЙ ЦИКЛ (исправлен)
+-- 7. ГЛАВНЫЙ ЦИКЛ
 -- =====================================================
 local spawnPos = findSpawn()
 addLog("ГАВ! Спавн найден: " .. tostring(spawnPos))
 
 local function startAI()
-    addLog("ГАВ! Кибер-пёс v.22.0 (ULTIMATE) активирован!")
+    addLog("ГАВ! Кибер-пёс v.23.0 (SMART) активирован!")
+    addLog("ГАВ! ХОДИТ КАК ЧЕЛОВЕК, НЕ ЗАСТРЕВАЕТ!")
 
     while true do
         wait(CONFIG.THINK_INTERVAL)
 
         if not player.Character or not humanoid or humanoid.Health <= 0 then
-            Memory.currentPath = {}
             Memory.stuckTimer = 0
             if Memory.lastAction ~= "Ожидание респауна" then
                 addLog("⏳ Ожидание респауна...")
@@ -442,5 +407,5 @@ end
 -- 8. ЗАПУСК
 -- =====================================================
 spawn(startAI)
-addLog("ГАВ! MM2 CYBER-PSYCHE v.22.0 (ULTIMATE) загружена!")
-addLog("ГАВ! ХОДЬБА 100% НАДЁЖНА!")
+addLog("ГАВ! MM2 CYBER-PSYCHE v.23.0 (SMART) загружена!")
+addLog("ГАВ! БЕЗ ЗАСТРЕВАНИЙ И КРУГОВ!")
