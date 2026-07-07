@@ -1,7 +1,6 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.28.0 (ULTIMATE WASD)
--- ПОЛНАЯ ЭМУЛЯЦИЯ WASD + МЫШЬ + ПРОБЕЛ
--- ЛОГ КАЖДОГО ДВИЖЕНИЯ! ГАВ!
+-- MM2 CYBER-PSYCHE v.28.1 (WASD FIXED)
+-- ИСПРАВЛЕНА ЭМУЛЯЦИЯ WASD! ГАВ!
 -- =====================================================
 
 local player = game.Players.LocalPlayer
@@ -17,20 +16,20 @@ local userInput = game:GetService("UserInputService")
 -- 1. НАСТРОЙКИ
 -- =====================================================
 local CONFIG = {
-    THINK_INTERVAL = 0.1,          -- Чаще думает
+    THINK_INTERVAL = 0.1,
     MOVE_SPEED = 16,
     AIM_SMOOTHNESS = 0.6,
     DODGE_CHANCE = 0.5,
     DODGE_DIST = 25,
     MURDERER_ATTACK_DIST = 12,
-    SHERIFF_SHOOT_DIST = 999,      -- Бесконечная дистанция для шерифа
+    SHERIFF_SHOOT_DIST = 999,
     INNOCENT_DANGER_DIST = 18,
     RADAR_RADIUS = 2,
     RADAR_ANGLES = 8,
 }
 
 -- =====================================================
--- 2. ПАМЯТЬ И ЛОГ
+-- 2. ПАМЯТЬ
 -- =====================================================
 local Memory = {
     killCount = 0,
@@ -39,17 +38,18 @@ local Memory = {
     lastRadarUpdate = 0,
     safeDir = Vector3.new(1, 0, 0),
     lastTarget = nil,
+    lastWASD = {W=false, A=false, S=false, D=false},
 }
 
 -- =====================================================
--- 3. ЛОГ (ПОКАЗЫВАЕТ КАЖДОЕ ДВИЖЕНИЕ)
+-- 3. ЛОГ
 -- =====================================================
 local function addLog(text)
     print("[КИБЕР-ПЁС] " .. text)
 end
 
 -- =====================================================
--- 4. РАДАР (ОБХОД СТЕН)
+-- 4. РАДАР
 -- =====================================================
 local function getSafeDirection()
     local now = tick()
@@ -91,44 +91,50 @@ local function getSafeDirection()
 end
 
 -- =====================================================
--- 5. ЭМУЛЯЦИЯ WASD + МЫШЬ + ПРОБЕЛ
+-- 5. НОВАЯ СИСТЕМА WASD (БЕЗ ЗАЛИПАНИЙ)
 -- =====================================================
-local function pressKey(key)
-    pcall(function()
-        userInput:SetKeyDown(key)
-        wait(0.05)
-        userInput:SetKeyUp(key)
-    end)
-end
-
-local function moveWithWASD(direction)
-    if not direction or direction.Magnitude < 0.1 then return end
-    
-    -- Определяем, какую клавишу нажать
-    local forward = direction.Z
-    local right = direction.X
-    
-    -- Очищаем предыдущие нажатия (чтобы не было конфликтов)
+local function resetKeys()
     userInput:SetKeyUp(Enum.KeyCode.W)
     userInput:SetKeyUp(Enum.KeyCode.A)
     userInput:SetKeyUp(Enum.KeyCode.S)
     userInput:SetKeyUp(Enum.KeyCode.D)
+    Memory.lastWASD = {W=false, A=false, S=false, D=false}
+end
+
+local function moveWithWASD(direction)
+    if not direction or direction.Magnitude < 0.1 then
+        resetKeys()
+        return
+    end
+    
+    local forward = direction.Z
+    local right = direction.X
+    
+    -- Сбрасываем все клавиши перед новым нажатием
+    resetKeys()
     wait(0.01)
     
-    -- Нажимаем нужные клавиши
+    -- Нажимаем только нужные клавиши
     if forward > 0.3 then
         userInput:SetKeyDown(Enum.KeyCode.W)
+        Memory.lastWASD.W = true
     elseif forward < -0.3 then
         userInput:SetKeyDown(Enum.KeyCode.S)
+        Memory.lastWASD.S = true
     end
     
     if right > 0.3 then
         userInput:SetKeyDown(Enum.KeyCode.D)
+        Memory.lastWASD.D = true
     elseif right < -0.3 then
         userInput:SetKeyDown(Enum.KeyCode.A)
+        Memory.lastWASD.A = true
     end
 end
 
+-- =====================================================
+-- 6. ЭМУЛЯЦИЯ МЫШИ И ПРОБЕЛА
+-- =====================================================
 local function aimAt(targetPos)
     if not targetPos then return end
     local screenPos, onScreen = camera:WorldToScreenPoint(targetPos)
@@ -163,7 +169,7 @@ local function performJump()
 end
 
 -- =====================================================
--- 6. УМНОЕ ДВИЖЕНИЕ (С ЛОГОМ)
+-- 7. УМНОЕ ДВИЖЕНИЕ
 -- =====================================================
 local function smartMove(targetPos, actionName)
     if not targetPos then return end
@@ -172,13 +178,20 @@ local function smartMove(targetPos, actionName)
     local currentPos = rootPart.Position
     local dist = (currentPos - targetPos).Magnitude
     
-    -- Лог: куда идём
+    -- Лог
     if Memory.lastTarget ~= targetPos then
         Memory.lastTarget = targetPos
-        addLog("🚶 Иду к " .. actionName .. " (дистанция: " .. string.format("%.0f", dist) .. "м)")
+        addLog("🚶 Иду к " .. actionName .. " (дист: " .. string.format("%.0f", dist) .. "м)")
     end
     
-    -- Получаем направление к цели и безопасное
+    -- Если цель рядом — сбрасываем клавиши
+    if dist < 3 then
+        resetKeys()
+        humanoid.WalkSpeed = CONFIG.MOVE_SPEED
+        return
+    end
+    
+    -- Направление к цели
     local toTarget = (targetPos - currentPos).Unit
     local safeDir = getSafeDirection()
     
@@ -208,7 +221,7 @@ local function smartMove(targetPos, actionName)
 end
 
 -- =====================================================
--- 7. ОСТАЛЬНЫЕ ФУНКЦИИ
+-- 8. ОСТАЛЬНЫЕ ФУНКЦИИ (БЕЗ ИЗМЕНЕНИЙ)
 -- =====================================================
 local function getPlayers()
     local result = {}
@@ -221,7 +234,7 @@ local function getPlayers()
         if hum and hum.Health <= 0 then continue end
         
         local dist = (rootPart.Position - root.Position).Magnitude
-        if dist > 9999 then continue end  -- Бесконечная дистанция
+        if dist > 9999 then continue end
         
         table.insert(result, {
             player = plr,
@@ -289,12 +302,11 @@ local function findHidingSpot(spawnPos)
 end
 
 -- =====================================================
--- 8. РОЛЕВАЯ ЛОГИКА (С ПОЛНЫМ ЛОГОМ)
+-- 9. РОЛЕВАЯ ЛОГИКА
 -- =====================================================
 local spawnPos = findSpawn()
 
 local function murdererLogic(players, coins)
-    -- Уклонение от шерифа
     local sheriff = nil
     for _, p in ipairs(players) do
         if p.team == "Sheriff" and p.distance < 30 then
@@ -314,7 +326,6 @@ local function murdererLogic(players, coins)
         end
     end
     
-    -- Поиск ближайшей цели (ЛЮБОЙ ИГРОК, КРОМЕ УБИЙЦ)
     local target = nil
     for _, p in ipairs(players) do
         if p.team ~= "Murderer" then
@@ -339,7 +350,6 @@ local function murdererLogic(players, coins)
 end
 
 local function sheriffLogic(players, coins)
-    -- Поиск убийцы (БЕСКОНЕЧНАЯ ДИСТАНЦИЯ)
     local murderer = nil
     for _, p in ipairs(players) do
         if p.team == "Murderer" then
@@ -352,7 +362,6 @@ local function sheriffLogic(players, coins)
         smartMove(murderer.pos, murderer.player.Name .. " (убийца)")
         addLog("🏃 [ШЕРИФ] Преследую убийцу " .. murderer.player.Name .. " (дист: " .. string.format("%.0f", murderer.distance) .. "м)")
         
-        -- Стреляем с ЛЮБОЙ дистанции
         if murderer.distance <= CONFIG.SHERIFF_SHOOT_DIST then
             local head = murderer.character:FindFirstChild("Head")
             if head then
@@ -367,7 +376,6 @@ local function sheriffLogic(players, coins)
             addLog("🔫 [ШЕРИФ] Стреляю в убийцу " .. murderer.player.Name .. "!")
         end
     else
-        -- Если убийца не найден — патруль и сбор монет
         if #coins > 0 then
             smartMove(coins[1].pos, "монете")
             Memory.coinCount = Memory.coinCount + 1
@@ -380,7 +388,6 @@ local function sheriffLogic(players, coins)
 end
 
 local function innocentLogic(players, coins)
-    -- Поиск убийцы
     local murderer = nil
     for _, p in ipairs(players) do
         if p.team == "Murderer" then
@@ -407,7 +414,7 @@ local function innocentLogic(players, coins)
 end
 
 -- =====================================================
--- 9. GUI ЛОГА (ДУБЛИРУЕТ КОНСОЛЬ)
+-- 10. GUI ЛОГА
 -- =====================================================
 local function createLogGUI()
     local screenGui = Instance.new("ScreenGui")
@@ -429,7 +436,7 @@ local function createLogGUI()
     title.Size = UDim2.new(1, 0, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "ГАВ! КИБЕР-ПЁС v.28.0 (WASD + LOG)"
+    title.Text = "ГАВ! КИБЕР-ПЁС v.28.1 (WASD FIXED)"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
@@ -459,7 +466,6 @@ end
 
 local gui = createLogGUI()
 
--- Переопределяем addLog для GUI
 local originalAddLog = addLog
 addLog = function(text)
     originalAddLog(text)
@@ -485,18 +491,19 @@ addLog = function(text)
 end
 
 -- =====================================================
--- 10. ГЛАВНЫЙ ЦИКЛ
+-- 11. ГЛАВНЫЙ ЦИКЛ
 -- =====================================================
 addLog("ГАВ! Спавн найден!")
 
 local function startAI()
-    addLog("ГАВ! Кибер-пёс v.28.0 активирован!")
-    addLog("ГАВ! WASD + МЫШЬ + ПРОБЕЛ — ВСЁ РАБОТАЕТ!")
+    addLog("ГАВ! Кибер-пёс v.28.1 активирован!")
+    addLog("ГАВ! WASD ИСПРАВЛЕН — НЕ ЗАЛИПАЕТ!")
     
     while true do
         wait(CONFIG.THINK_INTERVAL)
         
         if not player.Character or not humanoid or humanoid.Health <= 0 then
+            resetKeys() -- Сбрасываем клавиши при смерти
             if Memory.lastAction ~= "Мёртв" then
                 addLog("💀 Ожидание респауна...")
                 Memory.lastAction = "Мёртв"
@@ -523,5 +530,5 @@ local function startAI()
 end
 
 spawn(startAI)
-addLog("ГАВ! MM2 CYBER-PSYCHE v.28.0 загружена!")
-addLog("ГАВ! БЕСКОНЕЧНАЯ ДИСТАНЦИЯ ДЛЯ УБИЙЦЫ И ШЕРИФА!")
+addLog("ГАВ! MM2 CYBER-PSYCHE v.28.1 загружена!")
+addLog("ГАВ! ТЕПЕРЬ ХОДИТ БЕЗ ЗАЛИПАНИЙ!")
