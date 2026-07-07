@@ -1,5 +1,5 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.30.0 (FULL REWRITE)
+-- MM2 CYBER-PSYCHE v.30.1 (WALL AVOID + SPEED BOOST)
 -- =====================================================
 
 local player = game.Players.LocalPlayer
@@ -21,16 +21,16 @@ local mouse = player:GetMouse()
 -- НАСТРОЙКИ
 -- =====================================================
 local CONFIG = {
-    THINK_INTERVAL = 0.1,
-    MOVE_SPEED = 28,
+    THINK_INTERVAL = 0.08,
+    MOVE_SPEED = 45,  -- УВЕЛИЧИЛ СКОРОСТЬ!
     AIM_SMOOTHNESS = 0.7,
     DODGE_CHANCE = 0.4,
     DODGE_DIST = 25,
     MURDERER_ATTACK_DIST = 8,
     SHERIFF_SHOOT_DIST = 999,
     INNOCENT_DANGER_DIST = 15,
-    WALL_AVOID_DIST = 5,
-    PATROL_CHANGE_TIME = 5,  -- Менять патруль каждые 5 секунд
+    WALL_AVOID_DIST = 4,
+    PATROL_CHANGE_TIME = 5,
 }
 
 -- =====================================================
@@ -49,6 +49,7 @@ local Memory = {
     characterConnection = nil,
     hasGun = false,
     hasKnife = false,
+    lastDirection = nil,
 }
 
 local function addLog(text)
@@ -65,7 +66,7 @@ local function updateCharacter()
         rootPart = character:FindFirstChild("HumanoidRootPart")
         if humanoid and rootPart then
             humanoid.WalkSpeed = CONFIG.MOVE_SPEED
-            humanoid.JumpPower = 50
+            humanoid.JumpPower = 60
             return true
         end
     end
@@ -73,7 +74,7 @@ local function updateCharacter()
 end
 
 -- =====================================================
--- ПОИСК ОРУЖИЯ В ИНВЕНТАРЕ
+-- ПОИСК ОРУЖИЯ
 -- =====================================================
 local function checkWeapons()
     Memory.hasGun = false
@@ -81,7 +82,6 @@ local function checkWeapons()
     
     if not character then return end
     
-    -- Проверяем руку (там обычно оружие)
     local rightHand = character:FindFirstChild("RightHand")
     if rightHand then
         for _, child in pairs(rightHand:GetChildren()) do
@@ -95,7 +95,6 @@ local function checkWeapons()
         end
     end
     
-    -- Проверяем бэкпак
     local backpack = player:FindFirstChild("Backpack")
     if backpack then
         for _, child in pairs(backpack:GetChildren()) do
@@ -115,7 +114,7 @@ end
 -- =====================================================
 local function equipWeapon(weaponName)
     local backpack = player:FindFirstChild("Backpack")
-    if not backpack then return end
+    if not backpack then return false end
     
     for _, tool in pairs(backpack:GetChildren()) do
         if tool:IsA("Tool") and tool.Name:lower():find(weaponName:lower()) then
@@ -129,7 +128,58 @@ local function equipWeapon(weaponName)
 end
 
 -- =====================================================
--- ДВИЖЕНИЕ ЧЕРЕЗ BODYPOSITION (СТАБИЛЬНЕЕ)
+-- ОБХОД СТЕН (УЛУЧШЕННЫЙ!)
+-- =====================================================
+local function isWallAtPosition(position, direction, distance)
+    local ray = Ray.new(position + Vector3.new(0, 1.5, 0), direction * distance)
+    local hit, pos = workspace:FindPartOnRay(ray, character, false, true)
+    return hit ~= nil
+end
+
+local function getAvoidDirection(targetPos)
+    if not rootPart then return Vector3.new(1, 0, 0) end
+    
+    local dir = (targetPos - rootPart.Position).Unit
+    local currentPos = rootPart.Position + Vector3.new(0, 1.5, 0)
+    
+    -- Проверяем 5 направлений: прямо, вправо-вперёд, влево-вперёд, вправо, влево
+    local directions = {
+        {dir = dir, priority = 1},
+        {dir = (dir + Vector3.new(0.7, 0, 0.7)).Unit, priority = 2},
+        {dir = (dir - Vector3.new(0.7, 0, 0.7)).Unit, priority = 2},
+        {dir = (dir + Vector3.new(0, 0, 0.7)).Unit, priority = 3},
+        {dir = (dir - Vector3.new(0, 0, 0.7)).Unit, priority = 3},
+        {dir = -dir, priority = 4},
+    }
+    
+    local bestDir = nil
+    local bestPriority = math.huge
+    
+    for _, d in ipairs(directions) do
+        if not isWallAtPosition(currentPos, d.dir, CONFIG.WALL_AVOID_DIST) then
+            if d.priority < bestPriority then
+                bestDir = d.dir
+                bestPriority = d.priority
+            end
+        end
+    end
+    
+    -- Если все направления заблокированы - идём назад
+    if not bestDir then
+        bestDir = -dir
+    end
+    
+    -- Сглаживаем направление
+    if Memory.lastDirection then
+        bestDir = (Memory.lastDirection * 0.7 + bestDir * 0.3).Unit
+    end
+    Memory.lastDirection = bestDir
+    
+    return bestDir
+end
+
+-- =====================================================
+-- ДВИЖЕНИЕ (УЛУЧШЕННОЕ)
 -- =====================================================
 local function moveToTarget(targetPos)
     if not targetPos or not rootPart then return end
@@ -137,28 +187,45 @@ local function moveToTarget(targetPos)
     
     local distance = (targetPos - rootPart.Position).Magnitude
     
-    if distance < 2 then 
+    if distance < 1.5 then 
         stopMoving()
         return 
     end
     
-    -- Используем BodyPosition для точного движения
-    local bp = rootPart:FindFirstChild("CyberMoveBP")
-    if not bp then
-        bp = Instance.new("BodyPosition")
-        bp.Name = "CyberMoveBP"
-        bp.MaxForce = Vector3.new(8000, 8000, 8000)
-        bp.P = 2000
-        bp.D = 1000
-        bp.Parent = rootPart
+    -- Получаем направление с обходом стен
+    local direction = getAvoidDirection(targetPos)
+    
+    -- Корректировка высоты для лестниц
+    local targetY = targetPos.Y
+    local verticalOffset = 0
+    if targetY > rootPart.Position.Y + 1.5 then
+        verticalOffset = 3
+    elseif targetY < rootPart.Position.Y - 1.5 then
+        verticalOffset = -3
     end
     
-    -- Целевая позиция с небольшой высотой
-    local targetPosWithHeight = Vector3.new(targetPos.X, targetPos.Y + 1, targetPos.Z)
-    bp.Position = targetPosWithHeight
+    local finalDir = direction
+    if math.abs(verticalOffset) > 0 then
+        finalDir = (direction * 0.8 + Vector3.new(0, verticalOffset / CONFIG.MOVE_SPEED, 0)).Unit
+    end
+    
+    -- Создаём BodyVelocity (для скорости)
+    local bv = rootPart:FindFirstChild("CyberMoveBV")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "CyberMoveBV"
+        bv.MaxForce = Vector3.new(10000, 10000, 10000)
+        bv.Parent = rootPart
+    end
+    
+    -- Скорость с учётом дистанции
+    local speedMultiplier = math.min(1.2, distance / 10)
+    local speed = CONFIG.MOVE_SPEED * speedMultiplier * 2
+    
+    bv.Velocity = finalDir * speed
     
     -- Поворот к цели
-    local lookDir = Vector3.new(targetPos.X - rootPart.Position.X, 0, targetPos.Z - rootPart.Position.Z).Unit
+    local lookDir = Vector3.new(direction.X, 0, direction.Z).Unit
     if lookDir.Magnitude > 0.1 then
         rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + lookDir * 2)
     end
@@ -168,8 +235,8 @@ end
 
 local function stopMoving()
     if rootPart then
-        local bp = rootPart:FindFirstChild("CyberMoveBP")
-        if bp then bp:Destroy() end
+        local bv = rootPart:FindFirstChild("CyberMoveBV")
+        if bv then bv:Destroy() end
     end
     Memory.currentTarget = nil
 end
@@ -184,13 +251,13 @@ end)
 local function performJump()
     if humanoid then
         humanoid.Jump = true
-        wait(0.1)
+        wait(0.08)
         humanoid.Jump = false
     end
 end
 
 -- =====================================================
--- АТАКА (ГАРАНТИРОВАННО РАБОТАЕТ)
+-- АТАКА
 -- =====================================================
 local function performAttack()
     pcall(function()
@@ -219,7 +286,7 @@ local function aimAndShoot(targetPos)
 end
 
 -- =====================================================
--- ОПРЕДЕЛЕНИЕ РОЛИ ПО ОРУЖИЮ
+-- ОПРЕДЕЛЕНИЕ РОЛИ
 -- =====================================================
 local function getPlayerRole(plr)
     if plr == player then return nil end
@@ -227,7 +294,6 @@ local function getPlayerRole(plr)
     local char = plr.Character
     if not char then return nil end
     
-    -- Проверяем руку
     local rightHand = char:FindFirstChild("RightHand")
     if rightHand then
         for _, child in pairs(rightHand:GetChildren()) do
@@ -242,7 +308,6 @@ local function getPlayerRole(plr)
         end
     end
     
-    -- Проверяем бэкпак
     local backpack = plr:FindFirstChild("Backpack")
     if backpack then
         for _, child in pairs(backpack:GetChildren()) do
@@ -358,14 +423,12 @@ local spawnPos = findSpawn()
 local function murdererLogic(players, coins)
     if not rootPart then return end
     
-    -- Проверяем оружие
     checkWeapons()
     if not Memory.hasKnife then
         equipWeapon("knife")
         equipWeapon("murderer")
     end
     
-    -- Уклонение от шерифа
     local sheriff = nil
     for _, p in ipairs(players) do
         if p.team == "Sheriff" and p.distance < 35 then
@@ -385,7 +448,6 @@ local function murdererLogic(players, coins)
         end
     end
     
-    -- Поиск цели (мирные)
     local target = nil
     local minDist = math.huge
     
@@ -396,7 +458,6 @@ local function murdererLogic(players, coins)
         end
     end
     
-    -- Если мирных нет - ищем шерифа
     if not target then
         for _, p in ipairs(players) do
             if p.team == "Sheriff" and p.distance < minDist then
@@ -417,7 +478,6 @@ local function murdererLogic(players, coins)
             addLog("🏃 [УБИЙЦА] Бегу к " .. target.player.Name .. " (дист: " .. string.format("%.0f", target.distance) .. "м)")
         end
     else
-        -- Патруль с обновлением точки
         Memory.patrolTimer = Memory.patrolTimer + CONFIG.THINK_INTERVAL
         if not Memory.patrolTarget or Memory.patrolTimer > CONFIG.PATROL_CHANGE_TIME then
             Memory.patrolTarget = getRandomPatrolPoint(spawnPos)
@@ -431,7 +491,6 @@ end
 local function sheriffLogic(players, coins)
     if not rootPart then return end
     
-    -- Проверяем оружие
     checkWeapons()
     if not Memory.hasGun then
         equipWeapon("gun")
@@ -439,7 +498,6 @@ local function sheriffLogic(players, coins)
         equipWeapon("sheriff")
     end
     
-    -- Поиск убийцы
     local murderer = nil
     local minDist = math.huge
     
@@ -455,7 +513,6 @@ local function sheriffLogic(players, coins)
         moveToTarget(murderer.pos)
         addLog("🏃 [ШЕРИФ] Преследую убийцу " .. murderer.player.Name .. " (дист: " .. string.format("%.0f", murderer.distance) .. "м)")
         
-        -- Стреляем
         local shootPos = murderer.pos
         local head = murderer.character:FindFirstChild("Head")
         if head then
@@ -484,7 +541,6 @@ end
 local function innocentLogic(players, coins)
     if not rootPart then return end
     
-    -- Поиск убийцы
     local murderer = nil
     local minDist = math.huge
     
@@ -552,7 +608,7 @@ local function createGUI()
     title.Size = UDim2.new(1, -40, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "ГАВ! КИБЕР-ПЁС v.30.0"
+    title.Text = "ГАВ! КИБЕР-ПЁС v.30.1"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
@@ -662,6 +718,7 @@ local function restartScript()
     Memory.lastKnownMurdererPos = nil
     Memory.hasGun = false
     Memory.hasKnife = false
+    Memory.lastDirection = nil
     
     updateCharacter()
     
@@ -731,7 +788,6 @@ local function mainLoop()
             continue
         end
         
-        -- Проверяем оружие
         checkWeapons()
         
         local players = getPlayers()
@@ -766,10 +822,10 @@ Memory.updateConnection = runService.RenderStepped:Connect(function()
     end
 end)
 
-addLogGUI("ГАВ! КИБЕР-ПЁС v.30.0 ЗАГРУЖЕН!")
-addLogGUI("ГАВ! НОВОЕ ДВИЖЕНИЕ - BODYPOSITION!")
-addLogGUI("ГАВ! АВТОВЫБОР ОРУЖИЯ!")
-addLogGUI("ГАВ! ОБНОВЛЯЕМЫЙ ПАТРУЛЬ!")
+addLogGUI("ГАВ! КИБЕР-ПЁС v.30.1 ЗАГРУЖЕН!")
+addLogGUI("ГАВ! СКОРОСТЬ 45!")
+addLogGUI("ГАВ! УМНЫЙ ОБХОД СТЕН!")
+addLogGUI("ГАВ! НЕ ТЫКАЕТСЯ В СТЕНЫ!")
 
 Memory.mainCoroutine = coroutine.create(mainLoop)
 coroutine.resume(Memory.mainCoroutine)
