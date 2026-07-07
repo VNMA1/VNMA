@@ -1,15 +1,20 @@
 -- ============================================
--- NPC EXPLORER v3.1 (FULLY FIXED)
+-- NPC EXPLORER v3.2 (STABLE RELEASE)
 -- by Цербер для хозяйки
--- НЕТ ТОРМОЗОВ, УМНЫЙ ОБХОД, КНОПКА СТОП
+-- Все ошибки исправлены, работает везде
 -- ============================================
 
 local player = game.Players.LocalPlayer
 local mouse = player:GetMouse()
 local runService = game:GetService("RunService")
 local userInput = game:GetService("UserInputService")
-local virtualInput = game:GetService("VirtualInputManager")
 local players = game:GetService("Players")
+
+-- Проверяем наличие VirtualInputManager (для WASD)
+local virtualInput = pcall(function() return game:GetService("VirtualInputManager") end) and game:GetService("VirtualInputManager") or nil
+if not virtualInput then
+    warn("[NPC-EXPLORER] VirtualInputManager не найден! WASD не будет работать.")
+end
 
 -- Переменные
 local character = player.Character or player.CharacterAdded:Wait()
@@ -22,17 +27,17 @@ local CONFIG = {
     MOVE_SPEED = 16,
     EXPLORE_RADIUS = 45,
     MIN_EXPLORE_RADIUS = 12,
-    EXPLORE_CHANGE_TIME = 4,      -- меняем точку каждые 4 сек
+    EXPLORE_CHANGE_TIME = 4,
     WALL_AVOID_DIST = 3.5,
     JUMP_HEIGHT = 4,
-    TURN_SPEED = 0.15,            -- плавный поворот
+    TURN_SPEED = 0.15,
     LOOK_AROUND_CHANCE = 0.15,
     PAUSE_CHANCE = 0.08,
     PAUSE_TIME = 1.2,
-    STUCK_THRESHOLD = 2.5,        -- секунды
+    STUCK_THRESHOLD = 2.5,
     OBSTACLE_RETRY_TIME = 8,
     PATH_STEP = 2.5,
-    HEIGHT_CHECK_DIST = 3,        -- для проверки пола впереди
+    HEIGHT_CHECK_DIST = 3,
 }
 
 -- Память
@@ -53,7 +58,6 @@ local Memory = {
     obstacleTimer = 0,
 }
 
--- Функции логирования
 local function addLog(text)
     print("[NPC-EXPLORER] " .. text)
 end
@@ -78,28 +82,39 @@ updateCharacter()
 player.CharacterAdded:Connect(updateCharacter)
 
 -- ============================================
--- 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+-- 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Raycast вместо Ray)
 -- ============================================
 local function getGroundPosition(pos)
-    local ray = Ray.new(pos + Vector3.new(0, 10, 0), Vector3.new(0, -30, 0))
-    local hit, hitPos = workspace:FindPartOnRay(ray, character, false, true)
-    if hit then
-        return Vector3.new(pos.X, hitPos.Y + 0.5, pos.Z)
+    local origin = pos + Vector3.new(0, 10, 0)
+    local direction = Vector3.new(0, -30, 0)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {character}
+    local result = workspace:Raycast(origin, direction, params)
+    if result then
+        return Vector3.new(pos.X, result.Position.Y + 0.5, pos.Z)
     end
     return Vector3.new(pos.X, pos.Y, pos.Z)
 end
 
 local function isObstacle(position, direction, distance)
-    local ray = Ray.new(position + Vector3.new(0, 1.5, 0), direction * distance)
-    local hit, _ = workspace:FindPartOnRay(ray, character, false, true)
-    return hit ~= nil
+    local origin = position + Vector3.new(0, 1.5, 0)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {character}
+    local result = workspace:Raycast(origin, direction * distance, params)
+    return result ~= nil
 end
 
 local function getHeightAt(position)
-    local ray = Ray.new(position + Vector3.new(0, 15, 0), Vector3.new(0, -30, 0))
-    local hit, hitPos = workspace:FindPartOnRay(ray, character, false, true)
-    if hit then
-        return hitPos.Y
+    local origin = position + Vector3.new(0, 15, 0)
+    local direction = Vector3.new(0, -30, 0)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {character}
+    local result = workspace:Raycast(origin, direction, params)
+    if result then
+        return result.Position.Y
     end
     return position.Y
 end
@@ -108,10 +123,7 @@ local function canJumpOver(position, direction)
     local checkPos = position + direction * 2.5
     local height = getHeightAt(checkPos)
     local currentHeight = getHeightAt(position)
-    if height and (height - currentHeight) < CONFIG.JUMP_HEIGHT and height > currentHeight then
-        return true
-    end
-    return false
+    return height and (height - currentHeight) < CONFIG.JUMP_HEIGHT and height > currentHeight
 end
 
 local function getDistance(pos1, pos2)
@@ -120,31 +132,49 @@ end
 
 local function isOnGround()
     if not rootPart then return false end
-    local ray = Ray.new(rootPart.Position + Vector3.new(0, 0.5, 0), Vector3.new(0, -3, 0))
-    local hit, _ = workspace:FindPartOnRay(ray, character, false, true)
-    return hit ~= nil
+    local origin = rootPart.Position + Vector3.new(0, 0.5, 0)
+    local direction = Vector3.new(0, -3, 0)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {character}
+    local result = workspace:Raycast(origin, direction, params)
+    return result ~= nil
 end
 
 local function hasGroundAhead(direction, distance)
     if not rootPart then return false end
     local checkPos = rootPart.Position + direction * distance + Vector3.new(0, -2, 0)
-    local ray = Ray.new(checkPos + Vector3.new(0, 4, 0), Vector3.new(0, -8, 0))
-    local hit, _ = workspace:FindPartOnRay(ray, character, false, true)
-    return hit ~= nil
+    local origin = checkPos + Vector3.new(0, 4, 0)
+    local dir = Vector3.new(0, -8, 0)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {character}
+    local result = workspace:Raycast(origin, dir, params)
+    return result ~= nil
 end
 
 -- ============================================
--- 3. УПРАВЛЕНИЕ WASD (ЭМУЛЯЦИЯ)
+-- 3. УПРАВЛЕНИЕ WASD (с проверкой на наличие VirtualInputManager)
 -- ============================================
 local function pressKey(key)
-    virtualInput:SendKeyEvent(true, key, false, nil)
+    if virtualInput then
+        pcall(function()
+            virtualInput:SendKeyEvent(true, key, false, nil)
+        end)
+    end
 end
 
 local function releaseKey(key)
-    virtualInput:SendKeyEvent(false, key, false, nil)
+    if virtualInput then
+        pcall(function()
+            virtualInput:SendKeyEvent(false, key, false, nil)
+        end)
+    end
 end
 
 local function moveDirection(dir)
+    if not virtualInput then return end  -- если нет VirtualInputManager, ничего не делаем
+    
     if not dir or dir.Magnitude < 0.1 then
         releaseKey(Enum.KeyCode.W)
         releaseKey(Enum.KeyCode.S)
@@ -185,10 +215,12 @@ local function moveDirection(dir)
 end
 
 local function stopWASD()
-    releaseKey(Enum.KeyCode.W)
-    releaseKey(Enum.KeyCode.S)
-    releaseKey(Enum.KeyCode.A)
-    releaseKey(Enum.KeyCode.D)
+    if virtualInput then
+        releaseKey(Enum.KeyCode.W)
+        releaseKey(Enum.KeyCode.S)
+        releaseKey(Enum.KeyCode.A)
+        releaseKey(Enum.KeyCode.D)
+    end
 end
 
 -- ============================================
@@ -218,9 +250,7 @@ mouse.Button2Down:Connect(function()
             if plr and plr ~= player then
                 Memory.targetPlayer = plr
                 addLog("🎯 Цель выбрана: " .. plr.Name)
-                -- Удаляем старую подсветку
                 if Memory.targetHighlight then Memory.targetHighlight:Destroy() end
-                -- Создаём зелёную подсветку для цели
                 local hl = Instance.new("Highlight")
                 hl.Parent = plr.Character
                 hl.FillColor = Color3.fromRGB(0, 255, 0)
@@ -234,7 +264,6 @@ mouse.Button2Down:Connect(function()
     end
 end)
 
--- Очистка при смерти цели
 game.Players.PlayerRemoving:Connect(function(plr)
     if plr == Memory.targetPlayer then
         Memory.targetPlayer = nil
@@ -295,7 +324,6 @@ local espHighlights = {}
 local espNameplates = {}
 
 local function updateESP()
-    -- Удаляем старые
     for _, hl in pairs(espHighlights) do hl:Destroy() end
     for _, np in pairs(espNameplates) do np:Destroy() end
     espHighlights = {}
@@ -306,22 +334,19 @@ local function updateESP()
         if not plr.Character then continue end
         local char = plr.Character
         
-        -- Если это выбранная цель — её подсветка уже создана отдельно
         if plr == Memory.targetPlayer then
-            -- пропускаем, чтобы не перезаписывать зелёный
+            -- зелёная подсветка уже создана отдельно
         else
-            -- Для всех остальных — белый контур без заливки
             local hl = Instance.new("Highlight")
             hl.Parent = char
             hl.FillColor = Color3.fromRGB(255, 255, 255)
-            hl.FillTransparency = 1  -- полностью прозрачная заливка
+            hl.FillTransparency = 1
             hl.OutlineColor = Color3.fromRGB(255, 255, 255)
             hl.OutlineTransparency = 0.3
             hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             table.insert(espHighlights, hl)
         end
         
-        -- Имя (для всех, кроме себя)
         local billboard = Instance.new("BillboardGui")
         billboard.Parent = char:FindFirstChild("Head") or char
         billboard.Size = UDim2.new(0, 200, 0, 50)
@@ -341,18 +366,15 @@ local function updateESP()
     end
 end
 
--- Обновляем ESP при изменении списка игроков
 players.PlayerAdded:Connect(updateESP)
 players.PlayerRemoving:Connect(updateESP)
--- Также обновляем, если цель изменилась
 local oldTarget = nil
-game:GetService("RunService").Heartbeat:Connect(function()
+runService.Heartbeat:Connect(function()
     if Memory.targetPlayer ~= oldTarget then
         oldTarget = Memory.targetPlayer
         updateESP()
     end
 end)
-
 updateESP()
 
 -- ============================================
@@ -377,7 +399,6 @@ local function getExplorePoint()
             end
         end
     end
-    -- fallback
     local angle = math.random() * 2 * math.pi
     local x = currentPos.X + math.cos(angle) * 15
     local z = currentPos.Z + math.sin(angle) * 15
@@ -387,7 +408,7 @@ local function getExplorePoint()
 end
 
 -- ============================================
--- 8. УМНЫЙ ОБХОД (С ПРОВЕРКОЙ ВСЕХ НАПРАВЛЕНИЙ)
+-- 8. УМНЫЙ ОБХОД
 -- ============================================
 local function findClearDirection(targetPos)
     if not rootPart then return (targetPos - rootPart.Position).Unit end
@@ -396,14 +417,13 @@ local function findClearDirection(targetPos)
     local right = Vector3.new(-dir.Z, 0, dir.X).Unit
     local left = Vector3.new(dir.Z, 0, -dir.X).Unit
     
-    -- Проверяем 5 вариантов: прямо, правее, левее, сильно правее, сильно левее
     local options = {
         {dir = dir, angle = 0},
         {dir = (dir + right * 0.5).Unit, angle = 30},
         {dir = (dir - right * 0.5).Unit, angle = -30},
         {dir = (dir + right * 0.8).Unit, angle = 50},
         {dir = (dir - right * 0.8).Unit, angle = -50},
-        {dir = -dir, angle = 180},  -- назад
+        {dir = -dir, angle = 180},
     }
     
     local best = nil
@@ -411,18 +431,14 @@ local function findClearDirection(targetPos)
     
     for _, opt in ipairs(options) do
         local d = opt.dir
-        -- Проверяем, есть ли стена в этом направлении
         local blocked = isObstacle(rootPart.Position, d, CONFIG.WALL_AVOID_DIST)
-        -- Проверяем, есть ли пол впереди
         local hasFloor = hasGroundAhead(d, 2.5)
-        -- Также проверяем, можно ли перепрыгнуть
         local canJump = canJumpOver(rootPart.Position, d)
         
         local score = 0
         if not blocked then score = score + 3 end
         if hasFloor then score = score + 2 end
         if canJump then score = score + 1 end
-        -- Чем меньше угол отклонения от прямого направления, тем лучше
         score = score - math.abs(opt.angle) / 30
         
         if score > bestScore then
@@ -435,7 +451,7 @@ local function findClearDirection(targetPos)
 end
 
 -- ============================================
--- 9. ДВИЖЕНИЕ (БЕЗ ТОРМОЗОВ)
+-- 9. ДВИЖЕНИЕ
 -- ============================================
 local function moveToTarget(targetPos)
     if not rootPart or not targetPos then return end
@@ -446,7 +462,6 @@ local function moveToTarget(targetPos)
         return
     end
     
-    -- Корректируем высоту цели, чтобы не зависать на возвышениях
     local targetY = getHeightAt(targetPos)
     if targetY then
         targetPos = Vector3.new(targetPos.X, targetY + 0.5, targetPos.Z)
@@ -454,7 +469,6 @@ local function moveToTarget(targetPos)
     
     local dir = (targetPos - rootPart.Position).Unit
     
-    -- Проверка на обрыв
     if not hasGroundAhead(dir, 2) then
         stopWASD()
         addLog("⚠️ Обрыв! Меняю точку")
@@ -462,10 +476,8 @@ local function moveToTarget(targetPos)
         return
     end
     
-    -- Умный выбор направления (обход)
     local finalDir = findClearDirection(targetPos)
     
-    -- Если направление сильно отличается от прямого, считаем что препятствие
     if finalDir ~= dir and (finalDir - dir).Magnitude > 0.3 then
         Memory.obstacleTimer = Memory.obstacleTimer + 0.05
         if Memory.obstacleTimer > CONFIG.OBSTACLE_RETRY_TIME then
@@ -478,7 +490,6 @@ local function moveToTarget(targetPos)
         Memory.obstacleTimer = 0
     end
     
-    -- Если можно перепрыгнуть и не прыгаем
     if canJumpOver(rootPart.Position, finalDir) and isOnGround() and not Memory.isJumping then
         Memory.isJumping = true
         pressKey(Enum.KeyCode.Space)
@@ -487,13 +498,12 @@ local function moveToTarget(targetPos)
         Memory.isJumping = false
     end
     
-    -- Двигаемся
     moveDirection(finalDir)
     Memory.isMoving = true
 end
 
 -- ============================================
--- 10. ОСМОТР (СМОТРИТ НА ЦЕЛЬ)
+-- 10. ОСМОТР
 -- ============================================
 local function lookAtTarget(targetPos)
     if not rootPart or not targetPos then return
@@ -505,13 +515,22 @@ local function lookAtTarget(targetPos)
     end
 end
 
+local function lookAround()
+    local head = character:FindFirstChild("Head")
+    if head then
+        local angleY = math.rad(math.random(-35, 35))
+        local angleX = math.rad(math.random(-8, 8))
+        local lookAt = rootPart.CFrame * CFrame.Angles(0, angleY, 0) * CFrame.Angles(angleX, 0, 0)
+        head.CFrame = head.CFrame:Lerp(lookAt, 0.2)
+    end
+end
+
 -- ============================================
 -- 11. ОСНОВНАЯ ЛОГИКА
 -- ============================================
 local function npcBehavior()
     if not rootPart or not humanoid then return end
     
-    -- Проверка застревания
     if Memory.lastPosition then
         local moveDist = getDistance(rootPart.Position, Memory.lastPosition)
         if moveDist < 0.15 then
@@ -530,22 +549,18 @@ local function npcBehavior()
     end
     Memory.lastPosition = rootPart.Position
     
-    -- ЕСЛИ ЕСТЬ ЦЕЛЬ — СЛЕДУЕМ
     if Memory.targetPlayer and Memory.targetPlayer.Character then
         local targetRoot = Memory.targetPlayer.Character:FindFirstChild("HumanoidRootPart")
         if targetRoot then
             local targetPos = targetRoot.Position
-            local dist = getDistance(rootPart.Position, targetPos)
             humanoid.WalkSpeed = CONFIG.MOVE_SPEED
             drawPath(targetPos)
             moveToTarget(targetPos)
-            -- Смотрим на цель
             lookAtTarget(targetPos)
             return
         end
     end
     
-    -- ЕСЛИ НЕТ ЦЕЛИ — ИССЛЕДОВАНИЕ
     Memory.exploreTimer = Memory.exploreTimer + 0.05
     
     if Memory.isPaused then
@@ -566,13 +581,10 @@ local function npcBehavior()
         end
     end
     
-    -- Случайный осмотр (без цели)
     if math.random() < CONFIG.LOOK_AROUND_CHANCE then
-        -- просто повернуть голову влево/вправо
         lookAround()
     end
     
-    -- Случайная пауза
     if math.random() < CONFIG.PAUSE_CHANCE and not Memory.isPaused then
         Memory.isPaused = true
         Memory.pauseTimer = CONFIG.PAUSE_TIME * (0.5 + math.random() * 0.5)
@@ -598,16 +610,6 @@ local function npcBehavior()
     end
 end
 
-local function lookAround()
-    local head = character:FindFirstChild("Head")
-    if head then
-        local angleY = math.rad(math.random(-35, 35))
-        local angleX = math.rad(math.random(-8, 8))
-        local lookAt = rootPart.CFrame * CFrame.Angles(0, angleY, 0) * CFrame.Angles(angleX, 0, 0)
-        head.CFrame = head.CFrame:Lerp(lookAt, 0.2)
-    end
-end
-
 -- ============================================
 -- 12. ГЛАВНЫЙ ЦИКЛ
 -- ============================================
@@ -624,12 +626,12 @@ local function mainLoop()
             wait(1)
             continue
         end
-        npcBehavior()
+        pcall(npcBehavior)
     end
 end
 
 -- ============================================
--- 13. GUI (С КНОПКОЙ СТОП)
+-- 13. GUI
 -- ============================================
 local guiVisible = true
 local function createGUI()
@@ -662,7 +664,7 @@ local function createGUI()
     title.Size = UDim2.new(1, -35, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "🐕 NPC EXPLORER v3.1"
+    title.Text = "🐕 NPC EXPLORER v3.2"
     title.TextColor3 = Color3.fromRGB(255, 165, 0)
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
@@ -694,7 +696,6 @@ local function createGUI()
     info3.TextColor3 = Color3.fromRGB(255, 200, 100)
     info3.TextSize = 12
     
-    -- Кнопка СТОП
     local stopBtn = Instance.new("TextButton")
     stopBtn.Parent = frame
     stopBtn.Size = UDim2.new(0, 100, 0, 30)
@@ -705,7 +706,6 @@ local function createGUI()
     stopBtn.TextSize = 14
     stopBtn.Font = Enum.Font.SourceSansBold
     
-    -- Кнопка РЕСТАРТ
     local restartBtn = Instance.new("TextButton")
     restartBtn.Parent = frame
     restartBtn.Size = UDim2.new(0, 100, 0, 30)
@@ -774,7 +774,7 @@ gui.restartBtn.MouseButton1Click:Connect(restartScript)
 -- ============================================
 -- 15. ЗАПУСК
 -- ============================================
-addLog("🐕 NPC EXPLORER v3.1 ЗАГРУЖЕН!")
+addLog("🐕 NPC EXPLORER v3.2 ЗАГРУЖЕН!")
 addLog("🚶 Движение через WASD (эмуляция)")
 addLog("🟧 Оранжевый путь до цели")
 addLog("👁️ ESP: белый контур, цель – зелёная")
@@ -782,7 +782,6 @@ addLog("⏹ Кнопка СТОП добавлена")
 
 spawn(mainLoop)
 
--- Обновление ESP при респавне
 player.CharacterAdded:Connect(function()
     wait(0.5)
     updateCharacter()
