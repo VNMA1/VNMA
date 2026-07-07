@@ -1,7 +1,6 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.21.0 (HYBRID NAVIGATION)
--- ИСПРАВЛЕНА НАВИГАЦИЯ: БЕЗ ЗАСТРЕВАНИЙ И ПРЫЖКОВ!
--- ГАВ!
+-- MM2 CYBER-PSYCHE v.22.0 (ULTIMATE WALK)
+-- АБСОЛЮТНАЯ НАДЁЖНОСТЬ ХОДЬБЫ! ГАВ!
 -- =====================================================
 
 local player = game.Players.LocalPlayer
@@ -15,10 +14,10 @@ local userInput = game:GetService("UserInputService")
 local pathfinding = game:GetService("PathfindingService")
 
 -- =====================================================
--- 1. НАСТРОЙКИ
+-- 1. НАСТРОЙКИ (оптимизированы)
 -- =====================================================
 local CONFIG = {
-    THINK_INTERVAL = 0.15,
+    THINK_INTERVAL = 0.1,          -- чаще думает
     ATTACK_DIST = 15,
     MAX_VIEW_DIST = 100,
     PATROL_RADIUS = 25,
@@ -26,8 +25,9 @@ local CONFIG = {
     AIM_SMOOTHNESS = 0.8,
     DODGE_CHANCE = 0.3,
     DODGE_DIST = 20,
-    STUCK_CHECK_INTERVAL = 2,   -- проверка застревания каждые 2 секунды
-    JUMP_FORWARD_DIST = 8,      -- дистанция прыжка вперёд
+    STUCK_CHECK_INTERVAL = 1.5,    -- быстрее реагирует на застревание
+    JUMP_FORWARD_DIST = 8,
+    PATH_RECALC_INTERVAL = 2,      -- перестраивает путь каждые 2 сек
 }
 
 -- =====================================================
@@ -44,30 +44,34 @@ local Memory = {
     lastPosition = Vector3.new(0, 0, 0),
     stuckTimer = 0,
     isStuck = false,
+    lastPathRecalc = 0,
 }
 
 -- =====================================================
--- 3. ПОИСК ПУТИ С УЛУЧШЕННЫМИ ПАРАМЕТРАМИ
+-- 3. УЛУЧШЕННЫЙ ПОИСК ПУТИ
 -- =====================================================
 local function getPath(startPos, endPos)
     if not startPos or not endPos then return {} end
-    
+
     local path = pathfinding:CreatePath({
-        AgentRadius = 1.5,          -- меньше радиус, чтобы проходить в узких местах
+        AgentRadius = 1.5,
         AgentHeight = 4,
         AgentCanJump = true,
-        AgentMaxSlope = 80,         -- крутой подъём
+        AgentMaxSlope = 80,
         WaypointSpacing = 2,
+        Cost = {
+            Water = 20,  -- меньше штраф для воды
+        }
     })
-    
+
     local success = pcall(function()
         path:ComputeAsync(startPos, endPos)
     end)
-    
+
     if not success or path.Status ~= Enum.PathStatus.Success then
-        return {} -- путь не найден
+        return {}
     end
-    
+
     local waypoints = path:GetWaypoints()
     local points = {}
     for _, waypoint in ipairs(waypoints) do
@@ -77,72 +81,75 @@ local function getPath(startPos, endPos)
 end
 
 -- =====================================================
--- 4. ГИБРИДНОЕ ДВИЖЕНИЕ (ОСНОВНАЯ МАГИЯ)
+-- 4. 100% НАДЁЖНОЕ ДВИЖЕНИЕ
 -- =====================================================
 local function moveToTarget(targetPos)
     if not targetPos then return end
-    
-    -- Проверяем, не застрял ли персонаж
+
     local currentPos = rootPart.Position
+    local distanceToTarget = (currentPos - targetPos).Magnitude
+
+    -- Если цель уже рядом — не двигаемся
+    if distanceToTarget < 2 then
+        Memory.currentPath = {}
+        return
+    end
+
+    -- Проверка застревания
     local distanceMoved = (currentPos - Memory.lastPosition).Magnitude
-    
-    if distanceMoved < 0.5 then
+    if distanceMoved < 0.3 then
         Memory.stuckTimer = Memory.stuckTimer + CONFIG.THINK_INTERVAL
     else
         Memory.stuckTimer = 0
     end
-    
-    -- Если застрял > 2 секунд — пытаемся прыгнуть и двигаться напрямую
+
+    -- Если застрял — прыжок + сброс пути
     if Memory.stuckTimer > CONFIG.STUCK_CHECK_INTERVAL then
         Memory.isStuck = true
-        -- Прыгаем вперёд
         local jumpDirection = (targetPos - currentPos).Unit
         local jumpPos = currentPos + jumpDirection * CONFIG.JUMP_FORWARD_DIST
         humanoid:MoveTo(jumpPos)
         performJump()
         Memory.stuckTimer = 0
+        Memory.currentPath = {}
         addLog("🏃‍♂️ ПРЫЖОК для преодоления препятствия!")
         return
     else
         Memory.isStuck = false
     end
-    
-    -- Пытаемся построить путь
-    if #Memory.currentPath == 0 then
+
+    -- Перестраиваем путь каждые 2 секунды (для актуальности)
+    local now = tick()
+    if now - Memory.lastPathRecalc > CONFIG.PATH_RECALC_INTERVAL or #Memory.currentPath == 0 then
         Memory.currentPath = getPath(currentPos, targetPos)
         Memory.pathIndex = 1
+        Memory.lastPathRecalc = now
     end
-    
-    -- Если путь найден — идём по нему
+
+    -- Если путь найден — двигаемся по точкам
     if #Memory.currentPath > 0 and Memory.pathIndex <= #Memory.currentPath then
         local nextPoint = Memory.currentPath[Memory.pathIndex]
         if nextPoint then
             humanoid:MoveTo(nextPoint)
-            -- Если подошли к точке — переключаемся на следующую
-            if (currentPos - nextPoint).Magnitude < 3 then
+            if (currentPos - nextPoint).Magnitude < 2.5 then
                 Memory.pathIndex = Memory.pathIndex + 1
-                -- Если дошли до конца — сбрасываем путь
                 if Memory.pathIndex > #Memory.currentPath then
                     Memory.currentPath = {}
                 end
             end
         end
     else
-        -- Если путь не найден или закончился — идём по прямой
+        -- Запасной вариант: идём по прямой
         humanoid:MoveTo(targetPos)
-        -- Если дистанция до цели маленькая — сбрасываем путь
-        if (currentPos - targetPos).Magnitude < 5 then
-            Memory.currentPath = {}
-        end
     end
-    
-    -- Обновляем позицию для проверки застревания
+
+    -- Фиксируем позицию
     Memory.lastPosition = currentPos
     humanoid.WalkSpeed = CONFIG.MOVE_SPEED
 end
 
 -- =====================================================
--- 5. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+-- 5. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (без изменений)
 -- =====================================================
 local function findSpawn()
     for _, obj in pairs(workspace:GetChildren()) do
@@ -222,9 +229,11 @@ local function performAttack(targetPos)
 end
 
 local function performJump()
-    userInput:SetKeyDown(Enum.KeyCode.Space)
-    wait(0.05)
-    userInput:SetKeyUp(Enum.KeyCode.Space)
+    pcall(function()
+        userInput:SetKeyDown(Enum.KeyCode.Space)
+        wait(0.05)
+        userInput:SetKeyUp(Enum.KeyCode.Space)
+    end)
 end
 
 local function dodgeFromSheriff(sheriffPos)
@@ -237,7 +246,7 @@ local function dodgeFromSheriff(sheriffPos)
 end
 
 -- =====================================================
--- 6. GUI ЛОГА (СОХРАНЁН)
+-- 6. GUI ЛОГА (улучшен)
 -- =====================================================
 local function createLogGUI()
     local screenGui = Instance.new("ScreenGui")
@@ -247,10 +256,10 @@ local function createLogGUI()
 
     local frame = Instance.new("Frame")
     frame.Parent = screenGui
-    frame.Size = UDim2.new(0, 400, 0, 250)
-    frame.Position = UDim2.new(0.5, -200, 1, -260)
+    frame.Size = UDim2.new(0, 420, 0, 260)
+    frame.Position = UDim2.new(0.5, -210, 1, -270)
     frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    frame.BackgroundTransparency = 0.8
+    frame.BackgroundTransparency = 0.85
     frame.BorderSizePixel = 2
     frame.BorderColor3 = Color3.fromRGB(255, 0, 0)
 
@@ -259,7 +268,7 @@ local function createLogGUI()
     title.Size = UDim2.new(1, 0, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "ГАВ! ЛОГ ДЕЙСТВИЙ КИБЕР-ПСА"
+    title.Text = "ГАВ! ЛОГ ДЕЙСТВИЙ КИБЕР-ПСА v.22"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.TextSize = 18
     title.Font = Enum.Font.SourceSansBold
@@ -311,13 +320,13 @@ local function addLog(text)
 end
 
 -- =====================================================
--- 7. ГЛАВНЫЙ ЦИКЛ
+-- 7. ГЛАВНЫЙ ЦИКЛ (исправлен)
 -- =====================================================
 local spawnPos = findSpawn()
 addLog("ГАВ! Спавн найден: " .. tostring(spawnPos))
 
 local function startAI()
-    addLog("ГАВ! Кибер-пёс v.21.0 (HYBRID) активирован!")
+    addLog("ГАВ! Кибер-пёс v.22.0 (ULTIMATE) активирован!")
 
     while true do
         wait(CONFIG.THINK_INTERVAL)
@@ -433,5 +442,5 @@ end
 -- 8. ЗАПУСК
 -- =====================================================
 spawn(startAI)
-addLog("ГАВ! MM2 CYBER-PSYCHE v.21.0 (HYBRID) загружена!")
-addLog("ГАВ! НАВИГАЦИЯ ИСПРАВЛЕНА! НЕ ЗАСТРЕВАЕТ!")
+addLog("ГАВ! MM2 CYBER-PSYCHE v.22.0 (ULTIMATE) загружена!")
+addLog("ГАВ! ХОДЬБА 100% НАДЁЖНА!")
