@@ -1,96 +1,131 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.11.1 (FIXED EDITION)
--- 100% рабочая версия. ГАВ!
+-- MM2 CYBER-PSYCHE v.14.0 (GUI LOG EDITION)
+-- С логом действий в правом углу. ГАВ!
 -- =====================================================
 
 local player = game.Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
 local rootPart = character:WaitForChild("HumanoidRootPart")
-local camera = workspace.CurrentCamera
 local virtualUser = game:GetService("VirtualUser")
 
 -- =====================================================
--- 1. НАСТРОЙКИ (ИСПРАВЛЕНЫ)
+-- 1. GUI ДЛЯ ЛОГА
 -- =====================================================
-local CONFIG = {
-    THINK_INTERVAL_FAST = 0.05,
-    THINK_INTERVAL_SLOW = 0.15,
-    HUMAN_DELAY_MIN = 0.05,
-    HUMAN_DELAY_MAX = 0.2,
-    MAX_VIEW_DIST = 150,
-    ATTACK_DIST = 20,
-    SHOOT_DIST = 70,
-    DODGE_DIST = 30,
-    DANGER_DIST = 40,
-    PATROL_RADIUS = 30,        -- ДОБАВЛЕНО!
-    SMOOTH_FACTOR = 0.15,
-    JUMP_CHANCE = 0.15,
-    ERROR_CHANCE = 0.03,
-    LOOK_AWAY_CHANCE = 0.01,
-}
+local function createLogGUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Parent = player.PlayerGui
+    screenGui.Name = "CyberPsycheLog"
+    screenGui.ResetOnSpawn = false
+
+    local frame = Instance.new("Frame")
+    frame.Parent = screenGui
+    frame.Size = UDim2.new(0, 250, 0, 180)
+    frame.Position = UDim2.new(1, -260, 0, 10)
+    frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    frame.BackgroundTransparency = 0.6
+    frame.BorderSizePixel = 2
+    frame.BorderColor3 = Color3.fromRGB(255, 0, 0)
+
+    local title = Instance.new("TextLabel")
+    title.Parent = frame
+    title.Size = UDim2.new(1, 0, 0, 20)
+    title.Position = UDim2.new(0, 0, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "ГАВ! ЛОГ ДЕЙСТВИЙ"
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.TextSize = 12
+    title.Font = Enum.Font.SourceSansBold
+
+    local logFrame = Instance.new("ScrollingFrame")
+    logFrame.Parent = frame
+    logFrame.Size = UDim2.new(1, -10, 1, -30)
+    logFrame.Position = UDim2.new(0, 5, 0, 25)
+    logFrame.BackgroundTransparency = 1
+    logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    logFrame.ScrollBarThickness = 4
+
+    local layout = Instance.new("UIListLayout")
+    layout.Parent = logFrame
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 2)
+
+    return {
+        screenGui = screenGui,
+        frame = frame,
+        logFrame = logFrame,
+        layout = layout,
+        maxLines = 10,
+        lines = {}
+    }
+end
+
+local gui = createLogGUI()
 
 -- =====================================================
--- 2. ПАМЯТЬ
+-- 2. ФУНКЦИЯ ДОБАВЛЕНИЯ ЛОГА
 -- =====================================================
-local Memory = {
-    players = {},
-    coins = {},
-    lastAction = "",
-    killCount = 0,
-    coinCount = 0,
-    startTime = tick(),
-    lastKillTime = 0,
-    isPanic = false,
-    frameCount = 0,
-    patrolAngle = 0,
-}
+local function addLog(text)
+    if #gui.lines >= gui.maxLines then
+        local oldLine = table.remove(gui.lines, 1)
+        oldLine:Destroy()
+    end
 
--- =====================================================
--- 3. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (ДОБАВЛЕНА humanWait)
--- =====================================================
-local function humanWait()
-    local delay = CONFIG.HUMAN_DELAY_MIN + math.random() * (CONFIG.HUMAN_DELAY_MAX - CONFIG.HUMAN_DELAY_MIN)
-    wait(delay)
+    local label = Instance.new("TextLabel")
+    label.Parent = gui.logFrame
+    label.Size = UDim2.new(1, 0, 0, 16)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.TextSize = 11
+    label.Font = Enum.Font.SourceSans
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextYAlignment = Enum.TextYAlignment.Center
+    label.ClipsDescendants = true
+
+    table.insert(gui.lines, label)
+    gui.logFrame.CanvasSize = UDim2.new(0, 0, 0, #gui.lines * 18)
+    gui.logFrame.CanvasPosition = Vector2.new(0, gui.logFrame.CanvasSize.Y.Offset)
 end
 
 -- =====================================================
--- 4. ПОИСК СПАВНА (ИСПРАВЛЕНО)
+-- 3. НАСТРОЙКИ
+-- =====================================================
+local CONFIG = {
+    THINK_INTERVAL = 0.3,
+    ATTACK_DIST = 15,
+    MAX_VIEW_DIST = 100,
+    PATROL_RADIUS = 25,
+    SMOOTH_FACTOR = 0.2,
+}
+
+local Memory = {
+    patrolAngle = 0,
+    killCount = 0,
+    coinCount = 0,
+    lastAction = "",
+}
+
+-- =====================================================
+-- 4. ФУНКЦИИ
 -- =====================================================
 local function findSpawn()
     for _, obj in pairs(workspace:GetChildren()) do
-        if obj:IsA("SpawnLocation") or obj.Name == "Spawn" or obj.Name == "SpawnLocation" then
+        if obj:IsA("SpawnLocation") or obj.Name == "Spawn" then
             return obj.Position
         end
     end
-    print("ГАВ! Спавн не найден, использую центр карты!")
-    local map = workspace:FindFirstChild("Map")
-    if map then
-        local center = map:FindFirstChild("Center")
-        if center then
-            return center.Position
-        end
-    end
-    return Vector3.new(0, 0, 0)
+    return Vector3.new(0, 5, 0)
 end
 
--- =====================================================
--- 5. ПАТРУЛЬ (ИСПРАВЛЕНО)
--- =====================================================
 local function getPatrolPoint(spawnPos)
-    Memory.patrolAngle = (Memory.patrolAngle or 0) + 0.1
+    Memory.patrolAngle = Memory.patrolAngle + 0.15
     local radius = CONFIG.PATROL_RADIUS
     local x = spawnPos.X + math.cos(Memory.patrolAngle) * radius
     local z = spawnPos.Z + math.sin(Memory.patrolAngle) * radius
-    if math.random(1, 20) == 1 then
-        Memory.patrolAngle = Memory.patrolAngle + math.random(1, 3)
-    end
     return Vector3.new(x, spawnPos.Y, z)
 end
 
--- =====================================================
--- 6. ПОИСК ВРАГОВ (ИСПРАВЛЕНО)
--- =====================================================
 local function getTargets()
     local targets = {}
     for _, plr in pairs(game.Players:GetPlayers()) do
@@ -100,40 +135,28 @@ local function getTargets()
         if not plrRoot then continue end
         local plrHumanoid = plr.Character:FindFirstChild("Humanoid")
         if plrHumanoid and plrHumanoid.Health <= 0 then continue end
+
         local dist = (rootPart.Position - plrRoot.Position).Magnitude
         if dist > CONFIG.MAX_VIEW_DIST then continue end
-        local visible = true
-        if dist > 30 then
-            local ray = Ray.new(rootPart.Position, (plrRoot.Position - rootPart.Position).Unit * 500)
-            local hit, _ = workspace:FindPartOnRay(ray, character)
-            if hit and hit:IsA("Part") and hit.Name == "Wall" then
-                visible = false
-            end
-        end
+
         table.insert(targets, {
             player = plr,
-            root = plrRoot,
             distance = dist,
             pos = plrRoot.Position,
-            visible = visible,
             team = plr.Team and plr.Team.Name or "Innocent",
-            isMurderer = (plr.Team and plr.Team.Name == "Murderer"),
         })
     end
     table.sort(targets, function(a, b) return a.distance < b.distance end)
     return targets
 end
 
--- =====================================================
--- 7. ПОИСК МОНЕТ
--- =====================================================
 local function getCoins()
     local coins = {}
     for _, obj in pairs(workspace:GetChildren()) do
         if obj:IsA("Part") and obj.Name == "Coin" then
             local dist = (rootPart.Position - obj.Position).Magnitude
             if dist < CONFIG.MAX_VIEW_DIST then
-                table.insert(coins, {obj = obj, dist = dist, pos = obj.Position})
+                table.insert(coins, {pos = obj.Position, dist = dist})
             end
         end
     end
@@ -141,9 +164,6 @@ local function getCoins()
     return coins
 end
 
--- =====================================================
--- 8. ДВИЖЕНИЕ И АТАКА
--- =====================================================
 local function smoothMove(targetPos)
     if not targetPos then return end
     local current = rootPart.Position
@@ -157,175 +177,126 @@ local function performAttack()
     pcall(function()
         virtualUser:CaptureController()
         virtualUser:ClickButton2(Vector2.new(0, 0))
-        wait(0.02)
-        virtualUser:ClickButton2(Vector2.new(0, 0))
     end)
-    Memory.lastAction = "attack"
-    Memory.lastKillTime = tick()
 end
 
 -- =====================================================
--- 9. УКРЫТИЕ (ИСПРАВЛЕНО)
--- =====================================================
-local function findCover(targetPos)
-    if not targetPos then
-        return rootPart.Position + Vector3.new(math.random(-20, 20), 0, math.random(-20, 20))
-    end
-    local bestCover = nil
-    local bestDist = math.huge
-    for _, obj in pairs(workspace:GetChildren()) do
-        if obj:IsA("Part") and (obj.Name == "Wall" or obj.Name == "Box" or obj.Name == "Tree") then
-            local coverPos = obj.Position + (obj.Position - targetPos).Unit * 5
-            local dist = (rootPart.Position - coverPos).Magnitude
-            if dist < bestDist and dist > 5 then
-                bestDist = dist
-                bestCover = coverPos
-            end
-        end
-    end
-    if bestCover then
-        return bestCover
-    else
-        local escapeDir = (rootPart.Position - targetPos).Unit
-        return rootPart.Position + escapeDir * 25
-    end
-end
-
--- =====================================================
--- 10. ГЛАВНЫЙ МОЗГ
+-- 5. ГЛАВНЫЙ ЦИКЛ С ЛОГОМ
 -- =====================================================
 local spawnPos = findSpawn()
-print("ГАВ! Спавн найден: " .. tostring(spawnPos))
+addLog("ГАВ! Спавн найден!")
 
-local function think()
-    Memory.frameCount = Memory.frameCount + 1
-    if not player.Character or not humanoid or humanoid.Health <= 0 then
-        return
-    end
-    
-    local role = player.Team and player.Team.Name or "Innocent"
-    local targets = getTargets()
-    local coins = getCoins()
-    
-    local murderer = nil
-    local sheriff = nil
-    for _, t in ipairs(targets) do
-        if t.team == "Murderer" then
-            murderer = t
-        elseif t.team == "Sheriff" then
-            sheriff = t
-        end
-    end
-    
-    -- УБИЙЦА
-    if role == "Murderer" then
-        local target = nil
-        if sheriff and sheriff.distance < CONFIG.MAX_VIEW_DIST then
-            target = sheriff
-        elseif #targets > 0 then
-            target = targets[1]
-        end
-        if target then
-            smoothMove(target.pos)
-            humanWait()
-            performAttack()
-            Memory.killCount = Memory.killCount + 1
-        else
-            smoothMove(getPatrolPoint(spawnPos))
-            humanWait()
-        end
-        humanWait()
-    
-    -- ШЕРИФ
-    elseif role == "Sheriff" then
-        if murderer then
-            if murderer.distance > CONFIG.SHOOT_DIST then
-                smoothMove(murderer.pos)
-            else
-                local headPos = murderer.player.Character:FindFirstChild("Head")
-                if headPos then
-                    local screenPos, onScreen = camera:WorldToScreenPoint(headPos.Position)
-                    if onScreen then
-                        virtualUser:CaptureController()
-                        virtualUser:ClickButton2(Vector2.new(
-                            screenPos.X + math.random(-2,2),
-                            screenPos.Y + math.random(-2,2)
-                        ))
-                    end
-                end
-                humanWait()
-                performAttack()
-            end
-        elseif #coins > 0 then
-            smoothMove(coins[1].pos)
-            Memory.coinCount = Memory.coinCount + 1
-            humanWait()
-        else
-            smoothMove(getPatrolPoint(spawnPos))
-            humanWait()
-        end
-        humanWait()
-    
-    -- НЕВИННЫЙ
-    else
-        if murderer and murderer.distance < CONFIG.DODGE_DIST then
-            Memory.isPanic = true
-            local escapeDir = (rootPart.Position - murderer.pos).Unit
-            local zigzag = Vector3.new(math.random(-10,10), 0, math.random(-10,10))
-            smoothMove(rootPart.Position + escapeDir * 25 + zigzag)
-            humanWait()
-            return
-        end
-        Memory.isPanic = false
-        if #coins > 0 then
-            local danger = murderer and murderer.distance < CONFIG.DANGER_DIST
-            if not danger then
-                smoothMove(coins[1].pos)
-                Memory.coinCount = Memory.coinCount + 1
-                humanWait()
-            else
-                local cover = findCover(murderer.pos)
-                smoothMove(cover)
-                humanWait()
-            end
-        else
-            smoothMove(getPatrolPoint(spawnPos))
-            humanWait()
-        end
-    end
-    
-    -- ЗАЩИТА ОТ БАНА
-    if math.random() < CONFIG.ERROR_CHANCE then
-        rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, math.rad(math.random(-15,15)), 0)
-    end
-    if math.random() < CONFIG.JUMP_CHANCE then
-        humanoid.Jump = true
-    end
-    if math.random() < CONFIG.LOOK_AWAY_CHANCE then
-        camera.CFrame = camera.CFrame * CFrame.Angles(0, math.rad(90), 0)
-        humanWait()
-    end
-    
-    if Memory.frameCount % 50 == 0 then
-        print("ГАВ! Убийств: " .. Memory.killCount .. ", Монет: " .. Memory.coinCount)
-    end
-end
-
--- =====================================================
--- 11. ЗАПУСК
--- =====================================================
 local function startAI()
-    print("ГАВ! Кибер-пёс v.11.1 активирован, хозяйка калинка!")
+    addLog("ГАВ! Кибер-пёс v.14.0 активирован!")
+
     while true do
-        local interval = CONFIG.THINK_INTERVAL_SLOW
-        local targets = getTargets()
-        if #targets > 0 then
-            interval = CONFIG.THINK_INTERVAL_FAST
+        wait(CONFIG.THINK_INTERVAL)
+
+        if not player.Character or not humanoid or humanoid.Health <= 0 then
+            if Memory.lastAction ~= "Ожидание респауна" then
+                addLog("Ожидание респауна...")
+                Memory.lastAction = "Ожидание респауна"
+            end
+            continue
         end
-        wait(interval)
-        pcall(think)
+
+        local role = player.Team and player.Team.Name or "Innocent"
+        local targets = getTargets()
+        local coins = getCoins()
+
+        local murderer = nil
+        for _, t in ipairs(targets) do
+            if t.team == "Murderer" then
+                murderer = t
+                break
+            end
+        end
+
+        -- ===== УБИЙЦА =====
+        if role == "Murderer" then
+            if #targets > 0 then
+                local target = targets[1]
+                smoothMove(target.pos)
+                local distText = string.format("%.1f", target.distance)
+                if target.distance <= CONFIG.ATTACK_DIST then
+                    performAttack()
+                    Memory.killCount = Memory.killCount + 1
+                    addLog("🔪 Убийца атакует " .. target.player.Name .. " (" .. distText .. "м)")
+                    Memory.lastAction = "Атака"
+                else
+                    addLog("🏃 Убийца бежит к " .. target.player.Name .. " (" .. distText .. "м)")
+                    Memory.lastAction = "Бег к цели"
+                end
+            else
+                smoothMove(getPatrolPoint(spawnPos))
+                if Memory.lastAction ~= "Патруль" then
+                    addLog("🔄 Убийца патрулирует спавн")
+                    Memory.lastAction = "Патруль"
+                end
+            end
+
+        -- ===== ШЕРИФ =====
+        elseif role == "Sheriff" then
+            if murderer then
+                smoothMove(murderer.pos)
+                if murderer.distance <= CONFIG.ATTACK_DIST then
+                    performAttack()
+                    addLog("🔫 Шериф стреляет в убийцу (" .. string.format("%.1f", murderer.distance) .. "м)")
+                    Memory.lastAction = "Стрельба"
+                else
+                    addLog("🏃 Шериф преследует убийцу (" .. string.format("%.1f", murderer.distance) .. "м)")
+                    Memory.lastAction = "Преследование"
+                end
+            elseif #coins > 0 then
+                smoothMove(coins[1].pos)
+                if Memory.lastAction ~= "Сбор монет" then
+                    addLog("🪙 Шериф собирает монеты (" .. #coins .. " рядом)")
+                    Memory.lastAction = "Сбор монет"
+                end
+                Memory.coinCount = Memory.coinCount + 1
+            else
+                smoothMove(getPatrolPoint(spawnPos))
+                if Memory.lastAction ~= "Патруль" then
+                    addLog("🔄 Шериф патрулирует спавн")
+                    Memory.lastAction = "Патруль"
+                end
+            end
+
+        -- ===== НЕВИННЫЙ =====
+        else
+            if murderer and murderer.distance < CONFIG.ATTACK_DIST then
+                local escapeDir = (rootPart.Position - murderer.pos).Unit
+                local zigzag = Vector3.new(math.random(-10,10), 0, math.random(-10,10))
+                local newPos = rootPart.Position + escapeDir * 20 + zigzag
+                smoothMove(newPos)
+                addLog("😱 Невинный убегает от убийцы!")
+                Memory.lastAction = "Бегство"
+            elseif #coins > 0 then
+                smoothMove(coins[1].pos)
+                if Memory.lastAction ~= "Сбор монет" then
+                    addLog("🪙 Невинный собирает монеты (" .. #coins .. " рядом)")
+                    Memory.lastAction = "Сбор монет"
+                end
+                Memory.coinCount = Memory.coinCount + 1
+            else
+                smoothMove(getPatrolPoint(spawnPos))
+                if Memory.lastAction ~= "Патруль" then
+                    addLog("🔄 Невинный патрулирует спавн")
+                    Memory.lastAction = "Патруль"
+                end
+            end
+        end
+
+        -- Статистика
+        if math.random(1, 30) == 1 then
+            addLog("📊 Убийств: " .. Memory.killCount .. ", Монет: " .. Memory.coinCount)
+        end
     end
 end
 
-task.spawn(startAI)
-print("ГАВ! MM2 CYBER-PSYCHE v.11.1 (FIXED) загружена!")
+-- =====================================================
+-- 6. ЗАПУСК
+-- =====================================================
+spawn(startAI)
+addLog("ГАВ! MM2 CYBER-PSYCHE v.14.0 загружена!")
+addLog("ГАВ! ВСЁ РАБОТАЕТ, ХОЗЯЙКА!")
