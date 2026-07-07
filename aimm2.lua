@@ -19,7 +19,7 @@ local camera = workspace.CurrentCamera
 
 -- Настройки
 local CONFIG = {
-    MOVE_SPEED = 16,                -- Постоянная скорость (без ускорения)
+    MOVE_SPEED = 16,
     EXPLORE_RADIUS = 40,
     MIN_EXPLORE_RADIUS = 10,
     EXPLORE_CHANGE_TIME = 8,
@@ -32,8 +32,8 @@ local CONFIG = {
     STUCK_THRESHOLD = 3,
     OBSTACLE_RETRY_TIME = 8,
     PATH_STEP = 3,
-    FOLLOW_DISTANCE = 8,            -- Дистанция следования
-    FOLLOW_DEAD_ZONE = 2,           -- Мертвая зона (не двигаться если в пределах)
+    FOLLOW_DISTANCE = 8,
+    FOLLOW_DEAD_ZONE = 2,
 }
 
 -- Память
@@ -54,8 +54,8 @@ local Memory = {
     obstacleTimer = 0,
     currentTarget = nil,
     lastTargetUpdate = 0,
-    currentStatus = "🚶 Исследую карту",  -- Текущий статус
-    targetName = "",                     -- Имя цели
+    currentStatus = "🚶 Исследую карту",
+    targetName = "",
 }
 
 -- Функции логирования
@@ -72,7 +72,7 @@ local function updateCharacter()
     humanoid = character:FindFirstChild("Humanoid")
     rootPart = character:FindFirstChild("HumanoidRootPart")
     if humanoid and rootPart then
-        humanoid.WalkSpeed = CONFIG.MOVE_SPEED  -- Постоянная скорость
+        humanoid.WalkSpeed = CONFIG.MOVE_SPEED
         humanoid.JumpPower = 55
         humanoid.AutoRotate = false
         return true
@@ -251,7 +251,6 @@ mouse.Button2Down:Connect(function()
                 highlight.OutlineColor = Color3.fromRGB(0, 200, 0)
                 Memory.targetHighlight = highlight
                 clearPath()
-                -- Обновляем GUI
                 updateGUIStatus()
             end
         end
@@ -441,18 +440,16 @@ local function findClearDirection(targetPos)
 end
 
 -- ============================================
--- 10. ДВИЖЕНИЕ (ОБНОВЛЕНО - ТОЧНОЕ СЛЕДОВАНИЕ)
+-- 10. ДВИЖЕНИЕ
 -- ============================================
 local function moveToTarget(targetPos)
     if not rootPart or not targetPos then return end
     local distance = getDistance(rootPart.Position, targetPos)
     
-    -- Если цель - игрок, проверяем дистанцию
     if Memory.targetPlayer then
         local followDist = CONFIG.FOLLOW_DISTANCE
         local deadZone = CONFIG.FOLLOW_DEAD_ZONE
         
-        -- Если в мертвой зоне - стоим
         if distance < followDist - deadZone then
             stopWASD()
             Memory.isMoving = false
@@ -461,7 +458,6 @@ local function moveToTarget(targetPos)
             return
         end
         
-        -- Обновляем статус
         if distance > followDist + 5 then
             Memory.currentStatus = "🏃 Догоняю " .. Memory.targetName .. " (" .. math.floor(distance) .. "м)"
         else
@@ -476,7 +472,6 @@ local function moveToTarget(targetPos)
         return
     end
     
-    -- Проверка на обрыв
     local dir = (targetPos - rootPart.Position).Unit
     if not hasGroundAhead(dir, 2) then
         stopWASD()
@@ -486,10 +481,8 @@ local function moveToTarget(targetPos)
         return
     end
     
-    -- Умный обход препятствий
     local finalDir = findClearDirection(targetPos)
     
-    -- Проверка застревания
     if finalDir ~= dir and (finalDir - dir).Magnitude > 0.3 then
         Memory.obstacleTimer = Memory.obstacleTimer + 0.05
         if Memory.obstacleTimer > CONFIG.OBSTACLE_RETRY_TIME then
@@ -503,7 +496,6 @@ local function moveToTarget(targetPos)
         Memory.obstacleTimer = 0
     end
     
-    -- Прыжки через препятствия
     if canJumpOver(rootPart.Position, finalDir) and isOnGround() and not Memory.isJumping then
         Memory.isJumping = true
         pressKey(Enum.KeyCode.Space)
@@ -512,13 +504,12 @@ local function moveToTarget(targetPos)
         Memory.isJumping = false
     end
     
-    -- Движение
     moveDirection(finalDir)
     Memory.isMoving = true
 end
 
 -- ============================================
--- 11. GUI СТАТУС (НОВОЕ)
+-- 11. GUI СТАТУС
 -- ============================================
 local statusLabel = nil
 
@@ -529,12 +520,11 @@ local function updateGUIStatus()
 end
 
 -- ============================================
--- 12. ОСНОВНАЯ ЛОГИКА (ОБНОВЛЕНО)
+-- 12. ОСНОВНАЯ ЛОГИКА
 -- ============================================
 local function npcBehavior()
     if not rootPart or not humanoid then return end
     
-    -- Проверка застревания
     if Memory.lastPosition then
         local moveDist = getDistance(rootPart.Position, Memory.lastPosition)
         if moveDist < 0.15 then
@@ -554,20 +544,15 @@ local function npcBehavior()
     end
     Memory.lastPosition = rootPart.Position
     
-    -- ЕСЛИ ЕСТЬ ЦЕЛЬ
     if Memory.targetPlayer and Memory.targetPlayer.Character then
         local targetRoot = Memory.targetPlayer.Character:FindFirstChild("HumanoidRootPart")
         if targetRoot then
             local targetPos = targetRoot.Position
             local dist = getDistance(rootPart.Position, targetPos)
             
-            -- Поворачиваем камеру к цели
             rotateCameraTo(targetPos)
-            
-            -- Рисуем путь
             drawPath(targetPos)
             
-            -- Если далеко - идем, если близко - стоим
             if dist > CONFIG.FOLLOW_DISTANCE - CONFIG.FOLLOW_DEAD_ZONE then
                 moveToTarget(targetPos)
             else
@@ -575,7 +560,6 @@ local function npcBehavior()
                 Memory.isMoving = false
                 Memory.currentStatus = "🧍 Жду " .. Memory.targetName .. " (" .. math.floor(dist) .. "м)"
                 updateGUIStatus()
-                -- Иногда смотрим по сторонам
                 if math.random() < 0.02 then
                     local head = character:FindFirstChild("Head")
                     if head then
@@ -587,7 +571,6 @@ local function npcBehavior()
         end
     end
     
-    -- ИССЛЕДОВАНИЕ
     if Memory.targetPlayer == nil then
         Memory.currentStatus = "🚶 Исследую карту"
         updateGUIStatus()
@@ -611,7 +594,6 @@ local function npcBehavior()
         Memory.exploreTimer = 0
     end
     
-    -- Случайная пауза (очень редко)
     if math.random() < CONFIG.PAUSE_CHANCE and not Memory.isPaused then
         Memory.isPaused = true
         Memory.pauseTimer = CONFIG.PAUSE_TIME * (0.5 + math.random() * 0.5)
@@ -660,7 +642,7 @@ local function mainLoop()
 end
 
 -- ============================================
--- 14. GUI (ОБНОВЛЕН - ДОБАВЛЕН СТАТУС)
+-- 14. GUI
 -- ============================================
 local guiVisible = true
 local function createGUI()
@@ -671,7 +653,7 @@ local function createGUI()
     
     local frame = Instance.new("Frame")
     frame.Parent = screenGui
-    frame.Size = UDim2.new(0, 380, 0, 210)  -- Увеличен размер
+    frame.Size = UDim2.new(0, 380, 0, 210)
     frame.Position = UDim2.new(0.5, -190, 1, -220)
     frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     frame.BackgroundTransparency = 0.85
@@ -698,7 +680,6 @@ local function createGUI()
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
     
-    -- СТАТУС (НОВЫЙ)
     local statusBg = Instance.new("Frame")
     statusBg.Parent = frame
     statusBg.Size = UDim2.new(0.95, 0, 0, 35)
