@@ -1,7 +1,7 @@
 -- ============================================
--- NPC EXPLORER v4.2 (РАБОЧАЯ ВЕРСИЯ)
+-- NPC EXPLORER v4.3 (ФИНАЛЬНАЯ РАБОЧАЯ)
 -- by Цербер для хозяйки
--- Основано на v3.0 + поворот камеры + статус
+-- Исправлено: следование за целью, убраны лишние прыжки
 -- ============================================
 
 local player = game.Players.LocalPlayer
@@ -53,6 +53,7 @@ local Memory = {
     obstacleTimer = 0,
     currentStatus = "🚶 Исследую карту",
     targetName = "",
+    followingTarget = false,
 }
 
 -- Функции логирования
@@ -238,6 +239,7 @@ mouse.Button2Down:Connect(function()
             if plr and plr ~= player then
                 Memory.targetPlayer = plr
                 Memory.targetName = plr.Name
+                Memory.followingTarget = true
                 Memory.currentStatus = "🎯 Преследую " .. plr.Name
                 addLog("🎯 Цель выбрана: " .. plr.Name)
                 if Memory.targetHighlight then Memory.targetHighlight:Destroy() end
@@ -258,6 +260,7 @@ game.Players.PlayerRemoving:Connect(function(plr)
     if plr == Memory.targetPlayer then
         Memory.targetPlayer = nil
         Memory.targetName = ""
+        Memory.followingTarget = false
         Memory.currentStatus = "🚶 Исследую карту"
         if Memory.targetHighlight then
             Memory.targetHighlight:Destroy()
@@ -394,21 +397,13 @@ local function getExplorePoint()
 end
 
 -- ============================================
--- 9. ДВИЖЕНИЕ (ОСНОВНАЯ ЛОГИКА ИЗ V3.0)
+-- 9. ДВИЖЕНИЕ (ОСНОВНАЯ ЛОГИКА)
 -- ============================================
 local function moveToTarget(targetPos)
     if not rootPart or not targetPos then return end
     local distance = getDistance(rootPart.Position, targetPos)
     
-    -- Если цель - игрок и он близко
-    if Memory.targetPlayer and distance < CONFIG.FOLLOW_DISTANCE then
-        stopWASD()
-        Memory.isMoving = false
-        Memory.currentStatus = "🧍 Жду " .. Memory.targetName
-        updateGUIStatus()
-        return
-    end
-    
+    -- Если расстояние меньше 0.8 - стоим
     if distance < 0.8 then
         stopWASD()
         Memory.isMoving = false
@@ -419,9 +414,9 @@ local function moveToTarget(targetPos)
     local dir = (targetPos - rootPart.Position).Unit
     if not hasGroundAhead(dir, 2) then
         stopWASD()
-        Memory.exploreTarget = getExplorePoint()
-        Memory.currentStatus = "⚠️ Обрыв! Ищу обход"
-        updateGUIStatus()
+        if not Memory.targetPlayer then
+            Memory.exploreTarget = getExplorePoint()
+        end
         return
     end
     
@@ -429,23 +424,26 @@ local function moveToTarget(targetPos)
     if isObstacle(rootPart.Position, dir, CONFIG.WALL_AVOID_DIST) then
         Memory.obstacleTimer = Memory.obstacleTimer + 0.05
         if Memory.obstacleTimer > CONFIG.OBSTACLE_RETRY_TIME then
-            Memory.exploreTarget = getExplorePoint()
+            if not Memory.targetPlayer then
+                Memory.exploreTarget = getExplorePoint()
+            end
             Memory.obstacleTimer = 0
-            Memory.currentStatus = "🔄 Обхожу препятствие"
-            updateGUIStatus()
             return
         end
         
-        -- Попытка обойти
+        -- Попытка обойти (БЕЗ ПРЫЖКОВ при следовании за целью)
         local rightDir = Vector3.new(-dir.Z, 0, dir.X).Unit
         local leftDir = Vector3.new(dir.Z, 0, -dir.X).Unit
         
-        if canJumpOver(rootPart.Position, dir) and isOnGround() and not Memory.isJumping then
-            Memory.isJumping = true
-            pressKey(Enum.KeyCode.Space)
-            wait(0.1)
-            releaseKey(Enum.KeyCode.Space)
-            Memory.isJumping = false
+        -- Прыгаем только если НЕ следуем за целью ИЛИ есть реальное препятствие
+        if not Memory.followingTarget then
+            if canJumpOver(rootPart.Position, dir) and isOnGround() and not Memory.isJumping then
+                Memory.isJumping = true
+                pressKey(Enum.KeyCode.Space)
+                wait(0.1)
+                releaseKey(Enum.KeyCode.Space)
+                Memory.isJumping = false
+            end
         end
         
         if not isObstacle(rootPart.Position, rightDir, CONFIG.WALL_AVOID_DIST) then
@@ -454,7 +452,7 @@ local function moveToTarget(targetPos)
             dir = leftDir
         else
             dir = -dir
-            if isOnGround() then
+            if isOnGround() and not Memory.followingTarget then
                 pressKey(Enum.KeyCode.Space)
                 wait(0.1)
                 releaseKey(Enum.KeyCode.Space)
@@ -462,17 +460,6 @@ local function moveToTarget(targetPos)
         end
     else
         Memory.obstacleTimer = 0
-    end
-    
-    -- Обновляем статус если есть цель
-    if Memory.targetPlayer then
-        local dist = math.floor(distance)
-        if distance > CONFIG.FOLLOW_DISTANCE + 5 then
-            Memory.currentStatus = "🏃 Догоняю " .. Memory.targetName .. " (" .. dist .. "м)"
-        else
-            Memory.currentStatus = "🚶 Следую за " .. Memory.targetName .. " (" .. dist .. "м)"
-        end
-        updateGUIStatus()
     end
     
     moveDirection(dir)
@@ -509,25 +496,29 @@ end
 local function npcBehavior()
     if not rootPart or not humanoid then return end
     
-    -- Проверка застревания (как в v3.0)
-    if Memory.lastPosition then
-        local moveDist = getDistance(rootPart.Position, Memory.lastPosition)
-        if moveDist < 0.2 then
-            Memory.stuckTimer = Memory.stuckTimer + 0.05
-            if Memory.stuckTimer > CONFIG.STUCK_THRESHOLD then
-                Memory.exploreTarget = getExplorePoint()
+    -- Проверка застревания (только для исследования, не для следования)
+    if not Memory.followingTarget then
+        if Memory.lastPosition then
+            local moveDist = getDistance(rootPart.Position, Memory.lastPosition)
+            if moveDist < 0.2 then
+                Memory.stuckTimer = Memory.stuckTimer + 0.05
+                if Memory.stuckTimer > CONFIG.STUCK_THRESHOLD then
+                    Memory.exploreTarget = getExplorePoint()
+                    Memory.stuckTimer = 0
+                    Memory.currentStatus = "🔄 Застрял! Меняю направление"
+                    updateGUIStatus()
+                    if isOnGround() then
+                        pressKey(Enum.KeyCode.Space)
+                        wait(0.1)
+                        releaseKey(Enum.KeyCode.Space)
+                    end
+                end
+            else
                 Memory.stuckTimer = 0
-                Memory.currentStatus = "🔄 Застрял! Меняю направление"
-                updateGUIStatus()
-                pressKey(Enum.KeyCode.Space)
-                wait(0.1)
-                releaseKey(Enum.KeyCode.Space)
             end
-        else
-            Memory.stuckTimer = 0
         end
+        Memory.lastPosition = rootPart.Position
     end
-    Memory.lastPosition = rootPart.Position
     
     -- ЕСЛИ ЕСТЬ ЦЕЛЬ — СЛЕДУЕМ
     if Memory.targetPlayer and Memory.targetPlayer.Character then
@@ -542,10 +533,30 @@ local function npcBehavior()
             -- Рисуем путь
             drawPath(targetPos)
             
-            -- Двигаемся к цели
-            moveToTarget(targetPos)
+            -- Проверяем дистанцию
+            if dist > CONFIG.FOLLOW_DISTANCE then
+                -- Идем к цели
+                Memory.currentStatus = "🚶 Следую за " .. Memory.targetName .. " (" .. math.floor(dist) .. "м)"
+                updateGUIStatus()
+                moveToTarget(targetPos)
+            else
+                -- Стоим на месте (в радиусе 8 метров)
+                stopWASD()
+                Memory.isMoving = false
+                Memory.currentStatus = "🧍 Жду " .. Memory.targetName .. " (" .. math.floor(dist) .. "м)"
+                updateGUIStatus()
+                -- Смотрим по сторонам
+                if math.random() < 0.03 then
+                    local head = character:FindFirstChild("Head")
+                    if head then
+                        head.CFrame = head.CFrame * CFrame.Angles(0, math.rad(math.random(-30, 30)), 0)
+                    end
+                end
+            end
             return
         end
+    else
+        Memory.followingTarget = false
     end
     
     -- ИССЛЕДОВАНИЕ
@@ -660,7 +671,7 @@ local function createGUI()
     title.Size = UDim2.new(1, -35, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "🐕 NPC EXPLORER v4.2"
+    title.Text = "🐕 NPC EXPLORER v4.3"
     title.TextColor3 = Color3.fromRGB(255, 165, 0)
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
@@ -775,6 +786,7 @@ local function restartScript()
     Memory.lastPosition = nil
     Memory.targetPlayer = nil
     Memory.targetName = ""
+    Memory.followingTarget = false
     Memory.obstacleTimer = 0
     Memory.currentStatus = "🚶 Исследую карту"
     if Memory.targetHighlight then Memory.targetHighlight:Destroy() end
@@ -796,7 +808,7 @@ gui.restartBtn.MouseButton1Click:Connect(restartScript)
 -- ============================================
 -- 16. ЗАПУСК
 -- ============================================
-addLog("🐕 NPC EXPLORER v4.2 ЗАГРУЖЕН!")
+addLog("🐕 NPC EXPLORER v4.3 ЗАГРУЖЕН!")
 addLog("🚶 Движение через WASD (эмуляция)")
 addLog("🟧 Оранжевый путь до цели")
 addLog("👁️ ESP: белый контур, цель – зелёная")
