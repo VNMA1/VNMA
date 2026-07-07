@@ -1,20 +1,15 @@
 -- ============================================
--- NPC EXPLORER v3.2 (STABLE RELEASE)
+-- NPC EXPLORER v3.3 (COMPATIBLE + FULL FIX)
 -- by Цербер для хозяйки
--- Все ошибки исправлены, работает везде
+-- Работает везде (Ray old + улучшения)
 -- ============================================
 
 local player = game.Players.LocalPlayer
 local mouse = player:GetMouse()
 local runService = game:GetService("RunService")
 local userInput = game:GetService("UserInputService")
+local virtualInput = game:GetService("VirtualInputManager")
 local players = game:GetService("Players")
-
--- Проверяем наличие VirtualInputManager (для WASD)
-local virtualInput = pcall(function() return game:GetService("VirtualInputManager") end) and game:GetService("VirtualInputManager") or nil
-if not virtualInput then
-    warn("[NPC-EXPLORER] VirtualInputManager не найден! WASD не будет работать.")
-end
 
 -- Переменные
 local character = player.Character or player.CharacterAdded:Wait()
@@ -37,7 +32,6 @@ local CONFIG = {
     STUCK_THRESHOLD = 2.5,
     OBSTACLE_RETRY_TIME = 8,
     PATH_STEP = 2.5,
-    HEIGHT_CHECK_DIST = 3,
 }
 
 -- Память
@@ -82,39 +76,28 @@ updateCharacter()
 player.CharacterAdded:Connect(updateCharacter)
 
 -- ============================================
--- 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Raycast вместо Ray)
+-- 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (СТАРЫЕ RAY)
 -- ============================================
 local function getGroundPosition(pos)
-    local origin = pos + Vector3.new(0, 10, 0)
-    local direction = Vector3.new(0, -30, 0)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {character}
-    local result = workspace:Raycast(origin, direction, params)
-    if result then
-        return Vector3.new(pos.X, result.Position.Y + 0.5, pos.Z)
+    local ray = Ray.new(pos + Vector3.new(0, 10, 0), Vector3.new(0, -30, 0))
+    local hit, hitPos = workspace:FindPartOnRay(ray, character, false, true)
+    if hit then
+        return Vector3.new(pos.X, hitPos.Y + 0.5, pos.Z)
     end
     return Vector3.new(pos.X, pos.Y, pos.Z)
 end
 
 local function isObstacle(position, direction, distance)
-    local origin = position + Vector3.new(0, 1.5, 0)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {character}
-    local result = workspace:Raycast(origin, direction * distance, params)
-    return result ~= nil
+    local ray = Ray.new(position + Vector3.new(0, 1.5, 0), direction * distance)
+    local hit, _ = workspace:FindPartOnRay(ray, character, false, true)
+    return hit ~= nil
 end
 
 local function getHeightAt(position)
-    local origin = position + Vector3.new(0, 15, 0)
-    local direction = Vector3.new(0, -30, 0)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {character}
-    local result = workspace:Raycast(origin, direction, params)
-    if result then
-        return result.Position.Y
+    local ray = Ray.new(position + Vector3.new(0, 15, 0), Vector3.new(0, -30, 0))
+    local hit, hitPos = workspace:FindPartOnRay(ray, character, false, true)
+    if hit then
+        return hitPos.Y
     end
     return position.Y
 end
@@ -123,7 +106,10 @@ local function canJumpOver(position, direction)
     local checkPos = position + direction * 2.5
     local height = getHeightAt(checkPos)
     local currentHeight = getHeightAt(position)
-    return height and (height - currentHeight) < CONFIG.JUMP_HEIGHT and height > currentHeight
+    if height and (height - currentHeight) < CONFIG.JUMP_HEIGHT and height > currentHeight then
+        return true
+    end
+    return false
 end
 
 local function getDistance(pos1, pos2)
@@ -132,49 +118,35 @@ end
 
 local function isOnGround()
     if not rootPart then return false end
-    local origin = rootPart.Position + Vector3.new(0, 0.5, 0)
-    local direction = Vector3.new(0, -3, 0)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {character}
-    local result = workspace:Raycast(origin, direction, params)
-    return result ~= nil
+    local ray = Ray.new(rootPart.Position + Vector3.new(0, 0.5, 0), Vector3.new(0, -3, 0))
+    local hit, _ = workspace:FindPartOnRay(ray, character, false, true)
+    return hit ~= nil
 end
 
 local function hasGroundAhead(direction, distance)
     if not rootPart then return false end
     local checkPos = rootPart.Position + direction * distance + Vector3.new(0, -2, 0)
-    local origin = checkPos + Vector3.new(0, 4, 0)
-    local dir = Vector3.new(0, -8, 0)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {character}
-    local result = workspace:Raycast(origin, dir, params)
-    return result ~= nil
+    local ray = Ray.new(checkPos + Vector3.new(0, 4, 0), Vector3.new(0, -8, 0))
+    local hit, _ = workspace:FindPartOnRay(ray, character, false, true)
+    return hit ~= nil
 end
 
 -- ============================================
--- 3. УПРАВЛЕНИЕ WASD (с проверкой на наличие VirtualInputManager)
+-- 3. УПРАВЛЕНИЕ WASD
 -- ============================================
 local function pressKey(key)
-    if virtualInput then
-        pcall(function()
-            virtualInput:SendKeyEvent(true, key, false, nil)
-        end)
-    end
+    pcall(function()
+        virtualInput:SendKeyEvent(true, key, false, nil)
+    end)
 end
 
 local function releaseKey(key)
-    if virtualInput then
-        pcall(function()
-            virtualInput:SendKeyEvent(false, key, false, nil)
-        end)
-    end
+    pcall(function()
+        virtualInput:SendKeyEvent(false, key, false, nil)
+    end)
 end
 
 local function moveDirection(dir)
-    if not virtualInput then return end  -- если нет VirtualInputManager, ничего не делаем
-    
     if not dir or dir.Magnitude < 0.1 then
         releaseKey(Enum.KeyCode.W)
         releaseKey(Enum.KeyCode.S)
@@ -189,7 +161,6 @@ local function moveDirection(dir)
     local forwardDot = dir:Dot(forward)
     local rightDot = dir:Dot(right)
     
-    -- W/S
     if forwardDot > 0.25 then
         pressKey(Enum.KeyCode.W)
         releaseKey(Enum.KeyCode.S)
@@ -201,7 +172,6 @@ local function moveDirection(dir)
         releaseKey(Enum.KeyCode.S)
     end
     
-    -- A/D
     if rightDot > 0.25 then
         pressKey(Enum.KeyCode.D)
         releaseKey(Enum.KeyCode.A)
@@ -215,12 +185,10 @@ local function moveDirection(dir)
 end
 
 local function stopWASD()
-    if virtualInput then
-        releaseKey(Enum.KeyCode.W)
-        releaseKey(Enum.KeyCode.S)
-        releaseKey(Enum.KeyCode.A)
-        releaseKey(Enum.KeyCode.D)
-    end
+    releaseKey(Enum.KeyCode.W)
+    releaseKey(Enum.KeyCode.S)
+    releaseKey(Enum.KeyCode.A)
+    releaseKey(Enum.KeyCode.D)
 end
 
 -- ============================================
@@ -254,7 +222,7 @@ mouse.Button2Down:Connect(function()
                 local hl = Instance.new("Highlight")
                 hl.Parent = plr.Character
                 hl.FillColor = Color3.fromRGB(0, 255, 0)
-                hl.FillTransparency = 0.5
+                hl.FillTransparency = 0.4
                 hl.OutlineColor = Color3.fromRGB(0, 255, 0)
                 hl.OutlineTransparency = 0.2
                 Memory.targetHighlight = hl
@@ -335,7 +303,7 @@ local function updateESP()
         local char = plr.Character
         
         if plr == Memory.targetPlayer then
-            -- зелёная подсветка уже создана отдельно
+            -- зелёная подсветка уже создана
         else
             local hl = Instance.new("Highlight")
             hl.Parent = char
@@ -631,7 +599,7 @@ local function mainLoop()
 end
 
 -- ============================================
--- 13. GUI
+-- 13. GUI (С КНОПКОЙ СТОП)
 -- ============================================
 local guiVisible = true
 local function createGUI()
@@ -664,7 +632,7 @@ local function createGUI()
     title.Size = UDim2.new(1, -35, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "🐕 NPC EXPLORER v3.2"
+    title.Text = "🐕 NPC EXPLORER v3.3"
     title.TextColor3 = Color3.fromRGB(255, 165, 0)
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
@@ -774,7 +742,7 @@ gui.restartBtn.MouseButton1Click:Connect(restartScript)
 -- ============================================
 -- 15. ЗАПУСК
 -- ============================================
-addLog("🐕 NPC EXPLORER v3.2 ЗАГРУЖЕН!")
+addLog("🐕 NPC EXPLORER v3.3 ЗАГРУЖЕН!")
 addLog("🚶 Движение через WASD (эмуляция)")
 addLog("🟧 Оранжевый путь до цели")
 addLog("👁️ ESP: белый контур, цель – зелёная")
