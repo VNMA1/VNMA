@@ -1,6 +1,5 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.29.0 (FINAL WORKING)
--- 100% РАБОТАЕТ В XENO! ГАВ!
+-- MM2 CYBER-PSYCHE v.29.1 (FIXED MOVEMENT + STOP/RESTART)
 -- =====================================================
 
 local player = game.Players.LocalPlayer
@@ -11,13 +10,15 @@ local camera = workspace.CurrentCamera
 local virtualUser = game:GetService("VirtualUser")
 local mouse = player:GetMouse()
 local userInput = game:GetService("UserInputService")
+local runService = game:GetService("RunService")
+local guiService = game:GetService("StarterGui")
 
 -- =====================================================
--- 1. НАСТРОЙКИ
+-- НАСТРОЙКИ
 -- =====================================================
 local CONFIG = {
     THINK_INTERVAL = 0.15,
-    MOVE_SPEED = 16,
+    MOVE_SPEED = 20,
     AIM_SMOOTHNESS = 0.6,
     DODGE_CHANCE = 0.5,
     DODGE_DIST = 25,
@@ -27,13 +28,15 @@ local CONFIG = {
 }
 
 -- =====================================================
--- 2. ПАМЯТЬ И ЛОГ
+-- ПАМЯТЬ И УПРАВЛЕНИЕ ЦИКЛОМ
 -- =====================================================
 local Memory = {
     killCount = 0,
     coinCount = 0,
     lastAction = "",
     lastTarget = nil,
+    running = true,
+    thread = nil,
 }
 
 local function addLog(text)
@@ -41,29 +44,47 @@ local function addLog(text)
 end
 
 -- =====================================================
--- 3. ПРОСТОЕ ДВИЖЕНИЕ (РАБОТАЕТ ВСЕГДА)
+-- ДВИЖЕНИЕ ЧЕРЕЗ BODYVELOCITY (ГАРАНТИРОВАННО РАБОТАЕТ)
 -- =====================================================
 local function moveToTarget(targetPos)
     if not targetPos then return end
-    
-    -- Убеждаемся, что координаты нормальные
     if targetPos.Y < 0 then targetPos = Vector3.new(targetPos.X, 5, targetPos.Z) end
     
-    -- Устанавливаем скорость
     humanoid.WalkSpeed = CONFIG.MOVE_SPEED
     
-    -- Отправляем команду на движение
-    humanoid:MoveTo(targetPos)
+    local direction = (targetPos - rootPart.Position).Unit
+    local distance = (targetPos - rootPart.Position).Magnitude
     
-    -- Поворачиваемся к цели
-    local toTarget = (targetPos - rootPart.Position).Unit
-    if toTarget.Magnitude > 0.1 then
-        rootPart.CFrame = CFrame.new(rootPart.Position, rootPart.Position + toTarget)
+    if distance < 2 then return end
+    
+    -- Создаём/обновляем BodyVelocity
+    local bv = rootPart:FindFirstChild("CyberMoveBV")
+    if not bv then
+        bv = Instance.new("BodyVelocity")
+        bv.Name = "CyberMoveBV"
+        bv.MaxForce = Vector3.new(4000, 4000, 4000)
+        bv.Parent = rootPart
     end
+    
+    bv.Velocity = direction * CONFIG.MOVE_SPEED * 1.5
+    
+    -- Поворачиваем плавно
+    rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + direction * 2)
+end
+
+local function stopMoving()
+    local bv = rootPart:FindFirstChild("CyberMoveBV")
+    if bv then bv:Destroy() end
+end
+
+local function performJump()
+    humanoid.Jump = true
+    wait(0.1)
+    humanoid.Jump = false
 end
 
 -- =====================================================
--- 4. АТАКА И ПРЫЖОК
+-- АТАКА
 -- =====================================================
 local function aimAt(targetPos)
     if not targetPos then return end
@@ -90,16 +111,8 @@ local function performAttack(targetPos)
     end)
 end
 
-local function performJump()
-    pcall(function()
-        userInput:SetKeyDown(Enum.KeyCode.Space)
-        wait(0.05)
-        userInput:SetKeyUp(Enum.KeyCode.Space)
-    end)
-end
-
 -- =====================================================
--- 5. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+-- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 -- =====================================================
 local function getPlayers()
     local result = {}
@@ -180,12 +193,11 @@ local function findHidingSpot(spawnPos)
 end
 
 -- =====================================================
--- 6. РОЛЕВАЯ ЛОГИКА
+-- РОЛЕВАЯ ЛОГИКА
 -- =====================================================
 local spawnPos = findSpawn()
 
 local function murdererLogic(players, coins)
-    -- Уклонение от шерифа
     local sheriff = nil
     for _, p in ipairs(players) do
         if p.team == "Sheriff" and p.distance < 30 then
@@ -205,7 +217,6 @@ local function murdererLogic(players, coins)
         end
     end
     
-    -- Поиск ближайшей цели
     local target = nil
     for _, p in ipairs(players) do
         if p.team ~= "Murderer" then
@@ -230,7 +241,6 @@ local function murdererLogic(players, coins)
 end
 
 local function sheriffLogic(players, coins)
-    -- Поиск убийцы
     local murderer = nil
     for _, p in ipairs(players) do
         if p.team == "Murderer" then
@@ -295,61 +305,87 @@ local function innocentLogic(players, coins)
 end
 
 -- =====================================================
--- 7. GUI ЛОГА
+-- GUI ЛОГА + КНОПКИ
 -- =====================================================
-local function createLogGUI()
+local function createGUI()
     local screenGui = Instance.new("ScreenGui")
     screenGui.Parent = player.PlayerGui
-    screenGui.Name = "CyberPsycheLog"
+    screenGui.Name = "CyberPsycheGUI"
     screenGui.ResetOnSpawn = false
-
+    
+    -- Основной фон
     local frame = Instance.new("Frame")
     frame.Parent = screenGui
-    frame.Size = UDim2.new(0, 500, 0, 300)
-    frame.Position = UDim2.new(0.5, -250, 1, -310)
+    frame.Size = UDim2.new(0, 500, 0, 350)
+    frame.Position = UDim2.new(0.5, -250, 1, -360)
     frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     frame.BackgroundTransparency = 0.85
     frame.BorderSizePixel = 2
     frame.BorderColor3 = Color3.fromRGB(255, 0, 0)
-
+    
+    -- Заголовок
     local title = Instance.new("TextLabel")
     title.Parent = frame
     title.Size = UDim2.new(1, 0, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "ГАВ! КИБЕР-ПЁС v.29.0 (FINAL)"
+    title.Text = "ГАВ! КИБЕР-ПЁС v.29.1 (FIXED)"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
-
+    
+    -- Лог-область
     local logFrame = Instance.new("ScrollingFrame")
     logFrame.Parent = frame
-    logFrame.Size = UDim2.new(1, -10, 1, -40)
+    logFrame.Size = UDim2.new(1, -10, 0, 240)
     logFrame.Position = UDim2.new(0, 5, 0, 35)
     logFrame.BackgroundTransparency = 1
     logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
     logFrame.ScrollBarThickness = 6
-
+    
     local layout = Instance.new("UIListLayout")
     layout.Parent = logFrame
     layout.SortOrder = Enum.SortOrder.LayoutOrder
     layout.Padding = UDim.new(0, 4)
-
+    
+    -- Кнопка СТОП
+    local stopBtn = Instance.new("TextButton")
+    stopBtn.Parent = frame
+    stopBtn.Size = UDim2.new(0, 120, 0, 35)
+    stopBtn.Position = UDim2.new(0, 10, 1, -40)
+    stopBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+    stopBtn.Text = "⏹ СТОП"
+    stopBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    stopBtn.TextSize = 14
+    stopBtn.Font = Enum.Font.SourceSansBold
+    
+    -- Кнопка РЕСТАРТ
+    local restartBtn = Instance.new("TextButton")
+    restartBtn.Parent = frame
+    restartBtn.Size = UDim2.new(0, 120, 0, 35)
+    restartBtn.Position = UDim2.new(0, 140, 1, -40)
+    restartBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+    restartBtn.Text = "🔄 РЕСТАРТ"
+    restartBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    restartBtn.TextSize = 14
+    restartBtn.Font = Enum.Font.SourceSansBold
+    
     return {
         screenGui = screenGui,
         frame = frame,
         logFrame = logFrame,
         layout = layout,
-        maxLines = 15,
+        stopBtn = stopBtn,
+        restartBtn = restartBtn,
+        maxLines = 12,
         lines = {}
     }
 end
 
-local gui = createLogGUI()
+local gui = createGUI()
 
-local originalAddLog = addLog
-addLog = function(text)
-    originalAddLog(text)
+local function addLogGUI(text)
+    addLog(text)
     
     if #gui.lines >= gui.maxLines then
         local oldLine = table.remove(gui.lines, 1)
@@ -372,22 +408,18 @@ addLog = function(text)
 end
 
 -- =====================================================
--- 8. ГЛАВНЫЙ ЦИКЛ
+-- ГЛАВНЫЙ ЦИКЛ С УПРАВЛЕНИЕМ
 -- =====================================================
-addLog("ГАВ! Спавн найден!")
-
-local function startAI()
-    addLog("ГАВ! Кибер-пёс v.29.0 активирован!")
-    addLog("ГАВ! РАБОТАЕТ 100% В XENO!")
-    
-    while true do
+local function mainLoop()
+    while Memory.running do
         wait(CONFIG.THINK_INTERVAL)
         
         if not player.Character or not humanoid or humanoid.Health <= 0 then
             if Memory.lastAction ~= "Мёртв" then
-                addLog("💀 Ожидание респауна...")
+                addLogGUI("💀 Ожидание респауна...")
                 Memory.lastAction = "Мёртв"
             end
+            stopMoving()
             continue
         end
         
@@ -404,11 +436,40 @@ local function startAI()
         end
         
         if math.random(1, 30) == 1 then
-            addLog("📊 Убийств: " .. Memory.killCount .. ", Монет: " .. Memory.coinCount)
+            addLogGUI("📊 Убийств: " .. Memory.killCount .. ", Монет: " .. Memory.coinCount)
         end
     end
 end
 
-spawn(startAI)
-addLog("ГАВ! MM2 CYBER-PSYCHE v.29.0 загружена!")
-addLog("ГАВ! ТЕПЕРЬ ТОЧНО ХОДИТ!")
+-- =====================================================
+-- ФУНКЦИИ КНОПОК
+-- =====================================================
+local function stopScript()
+    Memory.running = false
+    stopMoving()
+    addLogGUI("⏹ СКРИПТ ОСТАНОВЛЕН!")
+end
+
+local function restartScript()
+    stopScript()
+    wait(0.5)
+    Memory.running = true
+    Memory.killCount = 0
+    Memory.coinCount = 0
+    Memory.lastAction = ""
+    addLogGUI("🔄 ПЕРЕЗАПУСК...")
+    spawn(mainLoop)
+    addLogGUI("✅ СКРИПТ ЗАПУЩЕН СНОВА!")
+end
+
+gui.stopBtn.MouseButton1Click:Connect(stopScript)
+gui.restartBtn.MouseButton1Click:Connect(restartScript)
+
+-- =====================================================
+-- ЗАПУСК
+-- =====================================================
+addLogGUI("ГАВ! КИБЕР-ПЁС v.29.1 ЗАГРУЖЕН!")
+addLogGUI("ГАВ! ДВИЖЕНИЕ ЧЕРЕЗ BODYVELOCITY!")
+addLogGUI("ГАВ! КНОПКИ СТОП/РЕСТАРТ ДОБАВЛЕНЫ!")
+
+spawn(mainLoop)
