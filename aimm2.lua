@@ -1,6 +1,6 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.14.0 (GUI LOG EDITION)
--- С логом действий в правом углу. ГАВ!
+-- MM2 CYBER-PSYCHE v.15.0 (MOVEMENT FIX)
+-- БЫСТРОЕ ДВИЖЕНИЕ, А НЕ ПРЫЖКИ! ГАВ!
 -- =====================================================
 
 local player = game.Players.LocalPlayer
@@ -92,22 +92,26 @@ end
 -- 3. НАСТРОЙКИ
 -- =====================================================
 local CONFIG = {
-    THINK_INTERVAL = 0.3,
+    THINK_INTERVAL = 0.2,
     ATTACK_DIST = 15,
     MAX_VIEW_DIST = 100,
-    PATROL_RADIUS = 25,
-    SMOOTH_FACTOR = 0.2,
+    PATROL_RADIUS = 30,
+    MOVE_SPEED = 16,           -- Максимальная скорость бега
 }
 
+-- =====================================================
+-- 4. ПАМЯТЬ
+-- =====================================================
 local Memory = {
     patrolAngle = 0,
     killCount = 0,
     coinCount = 0,
     lastAction = "",
+    targetPos = nil,
 }
 
 -- =====================================================
--- 4. ФУНКЦИИ
+-- 5. ФУНКЦИИ ДВИЖЕНИЯ (БЫСТРЫЕ)
 -- =====================================================
 local function findSpawn()
     for _, obj in pairs(workspace:GetChildren()) do
@@ -119,7 +123,7 @@ local function findSpawn()
 end
 
 local function getPatrolPoint(spawnPos)
-    Memory.patrolAngle = Memory.patrolAngle + 0.15
+    Memory.patrolAngle = Memory.patrolAngle + 0.2
     local radius = CONFIG.PATROL_RADIUS
     local x = spawnPos.X + math.cos(Memory.patrolAngle) * radius
     local z = spawnPos.Z + math.sin(Memory.patrolAngle) * radius
@@ -164,15 +168,26 @@ local function getCoins()
     return coins
 end
 
-local function smoothMove(targetPos)
+-- =====================================================
+-- 6. БЫСТРОЕ ДВИЖЕНИЕ (ЧЕРЕЗ CFrame)
+-- =====================================================
+local function fastMove(targetPos)
     if not targetPos then return end
+    
+    -- Устанавливаем скорость бега
+    humanoid.WalkSpeed = CONFIG.MOVE_SPEED
+    
+    -- Телепортируемся с небольшим смещением вперёд
     local current = rootPart.Position
     local direction = (targetPos - current).Unit
-    local step = direction * CONFIG.SMOOTH_FACTOR
+    local step = direction * 3 -- Быстрый шаг
     local newPos = current + step
     rootPart.CFrame = CFrame.new(newPos + Vector3.new(0, 2, 0))
 end
 
+-- =====================================================
+-- 7. АТАКА
+-- =====================================================
 local function performAttack()
     pcall(function()
         virtualUser:CaptureController()
@@ -181,13 +196,13 @@ local function performAttack()
 end
 
 -- =====================================================
--- 5. ГЛАВНЫЙ ЦИКЛ С ЛОГОМ
+-- 8. ГЛАВНЫЙ ЦИКЛ
 -- =====================================================
 local spawnPos = findSpawn()
-addLog("ГАВ! Спавн найден!")
+addLog("ГАВ! Спавн найден: " .. tostring(spawnPos))
 
 local function startAI()
-    addLog("ГАВ! Кибер-пёс v.14.0 активирован!")
+    addLog("ГАВ! Кибер-пёс v.15.0 активирован!")
 
     while true do
         wait(CONFIG.THINK_INTERVAL)
@@ -216,7 +231,7 @@ local function startAI()
         if role == "Murderer" then
             if #targets > 0 then
                 local target = targets[1]
-                smoothMove(target.pos)
+                fastMove(target.pos)
                 local distText = string.format("%.1f", target.distance)
                 if target.distance <= CONFIG.ATTACK_DIST then
                     performAttack()
@@ -228,7 +243,7 @@ local function startAI()
                     Memory.lastAction = "Бег к цели"
                 end
             else
-                smoothMove(getPatrolPoint(spawnPos))
+                fastMove(getPatrolPoint(spawnPos))
                 if Memory.lastAction ~= "Патруль" then
                     addLog("🔄 Убийца патрулирует спавн")
                     Memory.lastAction = "Патруль"
@@ -238,7 +253,7 @@ local function startAI()
         -- ===== ШЕРИФ =====
         elseif role == "Sheriff" then
             if murderer then
-                smoothMove(murderer.pos)
+                fastMove(murderer.pos)
                 if murderer.distance <= CONFIG.ATTACK_DIST then
                     performAttack()
                     addLog("🔫 Шериф стреляет в убийцу (" .. string.format("%.1f", murderer.distance) .. "м)")
@@ -248,14 +263,14 @@ local function startAI()
                     Memory.lastAction = "Преследование"
                 end
             elseif #coins > 0 then
-                smoothMove(coins[1].pos)
+                fastMove(coins[1].pos)
                 if Memory.lastAction ~= "Сбор монет" then
                     addLog("🪙 Шериф собирает монеты (" .. #coins .. " рядом)")
                     Memory.lastAction = "Сбор монет"
                 end
                 Memory.coinCount = Memory.coinCount + 1
             else
-                smoothMove(getPatrolPoint(spawnPos))
+                fastMove(getPatrolPoint(spawnPos))
                 if Memory.lastAction ~= "Патруль" then
                     addLog("🔄 Шериф патрулирует спавн")
                     Memory.lastAction = "Патруль"
@@ -268,18 +283,18 @@ local function startAI()
                 local escapeDir = (rootPart.Position - murderer.pos).Unit
                 local zigzag = Vector3.new(math.random(-10,10), 0, math.random(-10,10))
                 local newPos = rootPart.Position + escapeDir * 20 + zigzag
-                smoothMove(newPos)
+                fastMove(newPos)
                 addLog("😱 Невинный убегает от убийцы!")
                 Memory.lastAction = "Бегство"
             elseif #coins > 0 then
-                smoothMove(coins[1].pos)
+                fastMove(coins[1].pos)
                 if Memory.lastAction ~= "Сбор монет" then
                     addLog("🪙 Невинный собирает монеты (" .. #coins .. " рядом)")
                     Memory.lastAction = "Сбор монет"
                 end
                 Memory.coinCount = Memory.coinCount + 1
             else
-                smoothMove(getPatrolPoint(spawnPos))
+                fastMove(getPatrolPoint(spawnPos))
                 if Memory.lastAction ~= "Патруль" then
                     addLog("🔄 Невинный патрулирует спавн")
                     Memory.lastAction = "Патруль"
@@ -295,8 +310,8 @@ local function startAI()
 end
 
 -- =====================================================
--- 6. ЗАПУСК
+-- 9. ЗАПУСК
 -- =====================================================
 spawn(startAI)
-addLog("ГАВ! MM2 CYBER-PSYCHE v.14.0 загружена!")
-addLog("ГАВ! ВСЁ РАБОТАЕТ, ХОЗЯЙКА!")
+addLog("ГАВ! MM2 CYBER-PSYCHE v.15.0 загружена!")
+addLog("ГАВ! ТЕПЕРЬ БЕГАЕТ, А НЕ ПРЫГАЕТ!")
