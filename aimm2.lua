@@ -1,6 +1,7 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.19.0 (FINAL ULTIMATE)
--- С ПРЫЖКАМИ УКЛОНЕНИЯ И БОЛЬШИМ ЛОГОМ! ГАВ!
+-- MM2 CYBER-PSYCHE v.21.0 (HYBRID NAVIGATION)
+-- ИСПРАВЛЕНА НАВИГАЦИЯ: БЕЗ ЗАСТРЕВАНИЙ И ПРЫЖКОВ!
+-- ГАВ!
 -- =====================================================
 
 local player = game.Players.LocalPlayer
@@ -11,91 +12,10 @@ local camera = workspace.CurrentCamera
 local virtualUser = game:GetService("VirtualUser")
 local mouse = player:GetMouse()
 local userInput = game:GetService("UserInputService")
+local pathfinding = game:GetService("PathfindingService")
 
 -- =====================================================
--- 1. GUI ДЛЯ ЛОГА (БОЛЬШОЙ И СНИЗУ)
--- =====================================================
-local function createLogGUI()
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Parent = player.PlayerGui
-    screenGui.Name = "CyberPsycheLog"
-    screenGui.ResetOnSpawn = false
-
-    -- Основной фон (растянут внизу)
-    local frame = Instance.new("Frame")
-    frame.Parent = screenGui
-    frame.Size = UDim2.new(0, 400, 0, 250)
-    frame.Position = UDim2.new(0.5, -200, 1, -260) -- По центру внизу
-    frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    frame.BackgroundTransparency = 0.8
-    frame.BorderSizePixel = 2
-    frame.BorderColor3 = Color3.fromRGB(255, 0, 0)
-
-    -- Заголовок
-    local title = Instance.new("TextLabel")
-    title.Parent = frame
-    title.Size = UDim2.new(1, 0, 0, 30)
-    title.Position = UDim2.new(0, 0, 0, 0)
-    title.BackgroundTransparency = 1
-    title.Text = "ГАВ! ЛОГ ДЕЙСТВИЙ КИБЕР-ПСА"
-    title.TextColor3 = Color3.fromRGB(255, 255, 255)
-    title.TextSize = 18
-    title.Font = Enum.Font.SourceSansBold
-
-    -- Область для логов (скролл)
-    local logFrame = Instance.new("ScrollingFrame")
-    logFrame.Parent = frame
-    logFrame.Size = UDim2.new(1, -10, 1, -40)
-    logFrame.Position = UDim2.new(0, 5, 0, 35)
-    logFrame.BackgroundTransparency = 1
-    logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-    logFrame.ScrollBarThickness = 6
-
-    local layout = Instance.new("UIListLayout")
-    layout.Parent = logFrame
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 4)
-
-    return {
-        screenGui = screenGui,
-        frame = frame,
-        logFrame = logFrame,
-        layout = layout,
-        maxLines = 10,
-        lines = {}
-    }
-end
-
-local gui = createLogGUI()
-
--- =====================================================
--- 2. ФУНКЦИЯ ЛОГА (С УВЕЛИЧЕННЫМ ТЕКСТОМ)
--- =====================================================
-local function addLog(text)
-    if #gui.lines >= gui.maxLines then
-        local oldLine = table.remove(gui.lines, 1)
-        oldLine:Destroy()
-    end
-
-    local label = Instance.new("TextLabel")
-    label.Parent = gui.logFrame
-    label.Size = UDim2.new(1, 0, 0, 22)
-    label.BackgroundTransparency = 1
-    label.Text = text
-    label.TextColor3 = Color3.fromRGB(255, 255, 255)
-    label.TextSize = 14  -- Увеличенный шрифт
-    label.Font = Enum.Font.SourceSans
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.TextYAlignment = Enum.TextYAlignment.Center
-    label.ClipsDescendants = true
-
-    table.insert(gui.lines, label)
-    gui.logFrame.CanvasSize = UDim2.new(0, 0, 0, #gui.lines * 26)
-    gui.logFrame.CanvasPosition = Vector2.new(0, gui.logFrame.CanvasSize.Y.Offset)
-end
-
--- =====================================================
--- 3. НАСТРОЙКИ
+-- 1. НАСТРОЙКИ
 -- =====================================================
 local CONFIG = {
     THINK_INTERVAL = 0.15,
@@ -104,12 +24,14 @@ local CONFIG = {
     PATROL_RADIUS = 25,
     MOVE_SPEED = 16,
     AIM_SMOOTHNESS = 0.8,
-    DODGE_CHANCE = 0.3,  -- Шанс прыжка уклонения
-    DODGE_DIST = 20,     -- Дистанция для прыжка
+    DODGE_CHANCE = 0.3,
+    DODGE_DIST = 20,
+    STUCK_CHECK_INTERVAL = 2,   -- проверка застревания каждые 2 секунды
+    JUMP_FORWARD_DIST = 8,      -- дистанция прыжка вперёд
 }
 
 -- =====================================================
--- 4. ПАМЯТЬ
+-- 2. ПАМЯТЬ
 -- =====================================================
 local Memory = {
     patrolAngle = 0,
@@ -117,10 +39,110 @@ local Memory = {
     coinCount = 0,
     lastAction = "",
     isDodging = false,
+    currentPath = {},
+    pathIndex = 1,
+    lastPosition = Vector3.new(0, 0, 0),
+    stuckTimer = 0,
+    isStuck = false,
 }
 
 -- =====================================================
--- 5. ФУНКЦИИ (ТЕ ЖЕ, ЧТО БЫЛИ)
+-- 3. ПОИСК ПУТИ С УЛУЧШЕННЫМИ ПАРАМЕТРАМИ
+-- =====================================================
+local function getPath(startPos, endPos)
+    if not startPos or not endPos then return {} end
+    
+    local path = pathfinding:CreatePath({
+        AgentRadius = 1.5,          -- меньше радиус, чтобы проходить в узких местах
+        AgentHeight = 4,
+        AgentCanJump = true,
+        AgentMaxSlope = 80,         -- крутой подъём
+        WaypointSpacing = 2,
+    })
+    
+    local success = pcall(function()
+        path:ComputeAsync(startPos, endPos)
+    end)
+    
+    if not success or path.Status ~= Enum.PathStatus.Success then
+        return {} -- путь не найден
+    end
+    
+    local waypoints = path:GetWaypoints()
+    local points = {}
+    for _, waypoint in ipairs(waypoints) do
+        table.insert(points, waypoint.Position)
+    end
+    return points
+end
+
+-- =====================================================
+-- 4. ГИБРИДНОЕ ДВИЖЕНИЕ (ОСНОВНАЯ МАГИЯ)
+-- =====================================================
+local function moveToTarget(targetPos)
+    if not targetPos then return end
+    
+    -- Проверяем, не застрял ли персонаж
+    local currentPos = rootPart.Position
+    local distanceMoved = (currentPos - Memory.lastPosition).Magnitude
+    
+    if distanceMoved < 0.5 then
+        Memory.stuckTimer = Memory.stuckTimer + CONFIG.THINK_INTERVAL
+    else
+        Memory.stuckTimer = 0
+    end
+    
+    -- Если застрял > 2 секунд — пытаемся прыгнуть и двигаться напрямую
+    if Memory.stuckTimer > CONFIG.STUCK_CHECK_INTERVAL then
+        Memory.isStuck = true
+        -- Прыгаем вперёд
+        local jumpDirection = (targetPos - currentPos).Unit
+        local jumpPos = currentPos + jumpDirection * CONFIG.JUMP_FORWARD_DIST
+        humanoid:MoveTo(jumpPos)
+        performJump()
+        Memory.stuckTimer = 0
+        addLog("🏃‍♂️ ПРЫЖОК для преодоления препятствия!")
+        return
+    else
+        Memory.isStuck = false
+    end
+    
+    -- Пытаемся построить путь
+    if #Memory.currentPath == 0 then
+        Memory.currentPath = getPath(currentPos, targetPos)
+        Memory.pathIndex = 1
+    end
+    
+    -- Если путь найден — идём по нему
+    if #Memory.currentPath > 0 and Memory.pathIndex <= #Memory.currentPath then
+        local nextPoint = Memory.currentPath[Memory.pathIndex]
+        if nextPoint then
+            humanoid:MoveTo(nextPoint)
+            -- Если подошли к точке — переключаемся на следующую
+            if (currentPos - nextPoint).Magnitude < 3 then
+                Memory.pathIndex = Memory.pathIndex + 1
+                -- Если дошли до конца — сбрасываем путь
+                if Memory.pathIndex > #Memory.currentPath then
+                    Memory.currentPath = {}
+                end
+            end
+        end
+    else
+        -- Если путь не найден или закончился — идём по прямой
+        humanoid:MoveTo(targetPos)
+        -- Если дистанция до цели маленькая — сбрасываем путь
+        if (currentPos - targetPos).Magnitude < 5 then
+            Memory.currentPath = {}
+        end
+    end
+    
+    -- Обновляем позицию для проверки застревания
+    Memory.lastPosition = currentPos
+    humanoid.WalkSpeed = CONFIG.MOVE_SPEED
+end
+
+-- =====================================================
+-- 5. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 -- =====================================================
 local function findSpawn()
     for _, obj in pairs(workspace:GetChildren()) do
@@ -177,44 +199,6 @@ local function getCoins()
     return coins
 end
 
--- =====================================================
--- 6. ЭМУЛЯЦИЯ ДВИЖЕНИЯ (WASD + ПРЫЖОК)
--- =====================================================
-local function moveToPosition(targetPos)
-    if not targetPos then return end
-    humanoid.WalkSpeed = CONFIG.MOVE_SPEED
-    humanoid:MoveTo(targetPos)
-end
-
-local function performJump()
-    -- Эмуляция нажатия клавиши пробела
-    userInput:SetKeyDown(Enum.KeyCode.Space)
-    wait(0.05)
-    userInput:SetKeyUp(Enum.KeyCode.Space)
-end
-
--- =====================================================
--- 7. ПРЫЖОК УКЛОНЕНИЯ (ДЛЯ УБИЙЦЫ)
--- =====================================================
-local function dodgeFromSheriff(sheriffPos)
-    if not sheriffPos then return end
-    
-    -- Прыгаем в случайную сторону от шерифа
-    local escapeDir = (rootPart.Position - sheriffPos).Unit
-    local zigzag = Vector3.new(math.random(-15,15), 0, math.random(-15,15))
-    local newPos = rootPart.Position + escapeDir * CONFIG.DODGE_DIST + zigzag
-    
-    moveToPosition(newPos)
-    performJump() -- Прыжок для уклонения
-    addLog("💨 УБИЙЦА ПРЫГНУЛ, уклоняясь от шерифа!")
-    Memory.isDodging = true
-    wait(0.3)
-    Memory.isDodging = false
-end
-
--- =====================================================
--- 8. АТАКА + ПРИЦЕЛ
--- =====================================================
 local function aimAt(targetPos)
     if not targetPos then return end
     local screenPos, onScreen = camera:WorldToScreenPoint(targetPos)
@@ -237,19 +221,110 @@ local function performAttack(targetPos)
     end)
 end
 
+local function performJump()
+    userInput:SetKeyDown(Enum.KeyCode.Space)
+    wait(0.05)
+    userInput:SetKeyUp(Enum.KeyCode.Space)
+end
+
+local function dodgeFromSheriff(sheriffPos)
+    if not sheriffPos then return end
+    local escapeDir = (rootPart.Position - sheriffPos).Unit
+    local zigzag = Vector3.new(math.random(-15,15), 0, math.random(-15,15))
+    local newPos = rootPart.Position + escapeDir * CONFIG.DODGE_DIST + zigzag
+    moveToTarget(newPos)
+    performJump()
+end
+
 -- =====================================================
--- 9. ГЛАВНЫЙ ЦИКЛ (С ПРЫЖКАМИ ДЛЯ УБИЙЦЫ)
+-- 6. GUI ЛОГА (СОХРАНЁН)
+-- =====================================================
+local function createLogGUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Parent = player.PlayerGui
+    screenGui.Name = "CyberPsycheLog"
+    screenGui.ResetOnSpawn = false
+
+    local frame = Instance.new("Frame")
+    frame.Parent = screenGui
+    frame.Size = UDim2.new(0, 400, 0, 250)
+    frame.Position = UDim2.new(0.5, -200, 1, -260)
+    frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    frame.BackgroundTransparency = 0.8
+    frame.BorderSizePixel = 2
+    frame.BorderColor3 = Color3.fromRGB(255, 0, 0)
+
+    local title = Instance.new("TextLabel")
+    title.Parent = frame
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.Position = UDim2.new(0, 0, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text = "ГАВ! ЛОГ ДЕЙСТВИЙ КИБЕР-ПСА"
+    title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    title.TextSize = 18
+    title.Font = Enum.Font.SourceSansBold
+
+    local logFrame = Instance.new("ScrollingFrame")
+    logFrame.Parent = frame
+    logFrame.Size = UDim2.new(1, -10, 1, -40)
+    logFrame.Position = UDim2.new(0, 5, 0, 35)
+    logFrame.BackgroundTransparency = 1
+    logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    logFrame.ScrollBarThickness = 6
+
+    local layout = Instance.new("UIListLayout")
+    layout.Parent = logFrame
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Padding = UDim.new(0, 4)
+
+    return {
+        screenGui = screenGui,
+        frame = frame,
+        logFrame = logFrame,
+        layout = layout,
+        maxLines = 10,
+        lines = {}
+    }
+end
+
+local gui = createLogGUI()
+
+local function addLog(text)
+    if #gui.lines >= gui.maxLines then
+        local oldLine = table.remove(gui.lines, 1)
+        oldLine:Destroy()
+    end
+    local label = Instance.new("TextLabel")
+    label.Parent = gui.logFrame
+    label.Size = UDim2.new(1, 0, 0, 22)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.TextSize = 14
+    label.Font = Enum.Font.SourceSans
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextYAlignment = Enum.TextYAlignment.Center
+    label.ClipsDescendants = true
+    table.insert(gui.lines, label)
+    gui.logFrame.CanvasSize = UDim2.new(0, 0, 0, #gui.lines * 26)
+    gui.logFrame.CanvasPosition = Vector2.new(0, gui.logFrame.CanvasSize.Y.Offset)
+end
+
+-- =====================================================
+-- 7. ГЛАВНЫЙ ЦИКЛ
 -- =====================================================
 local spawnPos = findSpawn()
 addLog("ГАВ! Спавн найден: " .. tostring(spawnPos))
 
 local function startAI()
-    addLog("ГАВ! Кибер-пёс v.19.0 активирован!")
+    addLog("ГАВ! Кибер-пёс v.21.0 (HYBRID) активирован!")
 
     while true do
         wait(CONFIG.THINK_INTERVAL)
 
         if not player.Character or not humanoid or humanoid.Health <= 0 then
+            Memory.currentPath = {}
+            Memory.stuckTimer = 0
             if Memory.lastAction ~= "Ожидание респауна" then
                 addLog("⏳ Ожидание респауна...")
                 Memory.lastAction = "Ожидание респауна"
@@ -261,7 +336,6 @@ local function startAI()
         local targets = getTargets()
         local coins = getCoins()
 
-        -- Поиск убийцы и шерифа
         local murderer = nil
         local sheriff = nil
         for _, t in ipairs(targets) do
@@ -272,19 +346,19 @@ local function startAI()
             end
         end
 
-        -- ===== УБИЙЦА (С УКЛОНЕНИЕМ) =====
+        -- ===== УБИЙЦА =====
         if role == "Murderer" then
-            -- Если рядом шериф и он опасен — уклоняемся
             if sheriff and sheriff.distance < CONFIG.ATTACK_DIST * 2 then
                 if math.random() < CONFIG.DODGE_CHANCE then
                     dodgeFromSheriff(sheriff.pos)
+                    addLog("💨 Уклонение от шерифа!")
+                    Memory.lastAction = "Уклонение"
                 end
             end
 
-            -- Основная логика убийцы
             if #targets > 0 then
                 local target = targets[1]
-                moveToPosition(target.pos)
+                moveToTarget(target.pos)
                 if target.distance <= CONFIG.ATTACK_DIST then
                     performAttack(target.pos)
                     Memory.killCount = Memory.killCount + 1
@@ -295,17 +369,17 @@ local function startAI()
                     Memory.lastAction = "Бег к цели"
                 end
             else
-                moveToPosition(getPatrolPoint(spawnPos))
+                moveToTarget(getPatrolPoint(spawnPos))
                 if Memory.lastAction ~= "Патруль" then
-                    addLog("🔄 Убийца патрулирует спавн")
+                    addLog("🔄 Убийца патрулирует")
                     Memory.lastAction = "Патруль"
                 end
             end
 
-        -- ===== ШЕРИФ (ВСЕГДА ЗА УБИЙЦЕЙ) =====
+        -- ===== ШЕРИФ =====
         elseif role == "Sheriff" then
             if murderer then
-                moveToPosition(murderer.pos)
+                moveToTarget(murderer.pos)
                 if murderer.distance <= CONFIG.ATTACK_DIST then
                     local headPos = murderer.player.Character:FindFirstChild("Head")
                     if headPos then
@@ -324,32 +398,31 @@ local function startAI()
                     Memory.lastAction = "Преследование"
                 end
             else
-                moveToPosition(getPatrolPoint(spawnPos))
-                if Memory.lastAction ~= "Патруль (поиск убийцы)" then
+                moveToTarget(getPatrolPoint(spawnPos))
+                if Memory.lastAction ~= "Патруль (поиск)" then
                     addLog("🔄 Шериф ищет убийцу")
-                    Memory.lastAction = "Патруль (поиск убийцы)"
+                    Memory.lastAction = "Патруль (поиск)"
                 end
             end
 
-        -- ===== НЕВИННЫЙ (БЕЗ ИЗМЕНЕНИЙ) =====
+        -- ===== НЕВИННЫЙ =====
         else
             if #coins > 0 then
-                moveToPosition(coins[1].pos)
+                moveToTarget(coins[1].pos)
                 if Memory.lastAction ~= "Сбор монет" then
-                    addLog("🪙 Невинный собирает монеты (" .. #coins .. " рядом)")
+                    addLog("🪙 Невинный собирает монеты")
                     Memory.lastAction = "Сбор монет"
                 end
                 Memory.coinCount = Memory.coinCount + 1
             else
-                moveToPosition(getPatrolPoint(spawnPos))
+                moveToTarget(getPatrolPoint(spawnPos))
                 if Memory.lastAction ~= "Патруль" then
-                    addLog("🔄 Невинный патрулирует спавн")
+                    addLog("🔄 Невинный патрулирует")
                     Memory.lastAction = "Патруль"
                 end
             end
         end
 
-        -- Статистика
         if math.random(1, 30) == 1 then
             addLog("📊 Убийств: " .. Memory.killCount .. ", Монет: " .. Memory.coinCount)
         end
@@ -357,8 +430,8 @@ local function startAI()
 end
 
 -- =====================================================
--- 10. ЗАПУСК
+-- 8. ЗАПУСК
 -- =====================================================
 spawn(startAI)
-addLog("ГАВ! MM2 CYBER-PSYCHE v.19.0 загружена!")
-addLog("ГАВ! ПРЫЖКИ УКЛОНЕНИЯ АКТИВИРОВАНЫ!")
+addLog("ГАВ! MM2 CYBER-PSYCHE v.21.0 (HYBRID) загружена!")
+addLog("ГАВ! НАВИГАЦИЯ ИСПРАВЛЕНА! НЕ ЗАСТРЕВАЕТ!")
