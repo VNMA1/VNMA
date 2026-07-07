@@ -1,3 +1,8 @@
+-- =====================================================
+-- MM2 CYBER-PSYCHE v.9.0 (ULTIMATE EDITION)
+-- Абсолютный кибер-монстр для ПК. ГАВ!
+-- =====================================================
+
 local player = game.Players.LocalPlayer
 local character = player.Character or player.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
@@ -7,36 +12,48 @@ local virtualUser = game:GetService("VirtualUser")
 local runService = game:GetService("RunService")
 
 -- =====================================================
--- 1. СКРЫТЫЕ НАСТРОЙКИ (не менять!)
+-- 1. МЕГА-НАСТРОЙКИ (оптимизировано под ПК)
 -- =====================================================
 local CONFIG = {
-    HUMAN_DELAY_MIN = 0.15,      -- минимальная задержка (человек)
-    HUMAN_DELAY_MAX = 0.45,      -- максимальная задержка
-    MAX_VIEW_DIST = 70,          -- дистанция обзора
-    DODGE_DIST = 20,             -- дистанция для бегства
-    THINK_INTERVAL = 0.6,        -- такт мозга (сек)
-    JUMP_CHANCE = 0.08,          -- шанс случайного прыжка
-    ERROR_CHANCE = 0.05,         -- шанс "ошибки" (поворот не туда)
-    LOOK_AWAY_CHANCE = 0.03,     -- шанс посмотреть в стену
-    SMOOTH_FACTOR = 0.4,         -- плавность движения
+    -- Времена
+    THINK_INTERVAL_FAST = 0.25,    -- когда враг рядом
+    THINK_INTERVAL_SLOW = 0.8,     -- когда всё спокойно
+    HUMAN_DELAY_MIN = 0.1,
+    HUMAN_DELAY_MAX = 0.35,
+    
+    -- Дистанции
+    MAX_VIEW_DIST = 100,           -- видит на 100 метров
+    ATTACK_DIST = 15,              -- дистанция для удара
+    SHOOT_DIST = 50,               -- дистанция для выстрела
+    DODGE_DIST = 25,               -- дистанция для бегства
+    DANGER_DIST = 30,              -- опасная дистанция для монет
+    
+    -- Плавность
+    SMOOTH_FACTOR = 0.25,          -- очень плавно
+    
+    -- Шансы
+    JUMP_CHANCE = 0.12,
+    ERROR_CHANCE = 0.04,
+    LOOK_AWAY_CHANCE = 0.02,
+    PANIC_CHANCE = 0.3,            -- шанс хаотичного бегства
 }
 
 -- =====================================================
--- 2. ПАМЯТЬ И СОСТОЯНИЕ
+-- 2. ПАМЯТЬ
 -- =====================================================
 local Memory = {
     players = {},
     coins = {},
-    murdererPos = nil,
     lastAction = "",
-    actionTime = 0,
-    roundStart = tick(),
     killCount = 0,
     coinCount = 0,
+    startTime = tick(),
+    lastKillTime = 0,
+    isPanic = false,
 }
 
 -- =====================================================
--- 3. УМНЫЕ ЗАДЕРЖКИ (реалистичные)
+-- 3. УМНЫЕ ЗАДЕРЖКИ
 -- =====================================================
 local function humanWait()
     local delay = CONFIG.HUMAN_DELAY_MIN + math.random() * (CONFIG.HUMAN_DELAY_MAX - CONFIG.HUMAN_DELAY_MIN)
@@ -44,53 +61,57 @@ local function humanWait()
 end
 
 -- =====================================================
--- 4. БЕЗОПАСНОЕ ПОЛУЧЕНИЕ ОБЪЕКТОВ
+-- 4. ПОИСК ВРАГОВ (С ПРЕДСКАЗАНИЕМ)
 -- =====================================================
-local function safeGet(obj, path)
-    local parts = string.split(path, ".")
-    for _, part in ipairs(parts) do
-        if not obj then return nil end
-        obj = obj[part]
-    end
-    return obj
-end
-
--- =====================================================
--- 5. ПОИСК БЛИЖАЙШЕГО ВРАГА (с учётом видимости)
--- =====================================================
-local function getTargets(onlyVisible)
+local function getTargets()
     local targets = {}
+    local now = tick()
+    
     for _, plr in pairs(game.Players:GetPlayers()) do
         if plr == player then continue end
         if not plr.Character then continue end
+        
         local plrRoot = plr.Character:FindFirstChild("HumanoidRootPart")
         if not plrRoot then continue end
+        
+        local plrHumanoid = plr.Character:FindFirstChild("Humanoid")
+        if plrHumanoid and plrHumanoid.Health <= 0 then continue end -- игнорируем мёртвых
+        
         local dist = (rootPart.Position - plrRoot.Position).Magnitude
         if dist > CONFIG.MAX_VIEW_DIST then continue end
-        -- Проверка видимости (упрощённая, без Raycast, чтобы не жрать ресурсы)
+        
+        -- Предсказание позиции (куда побежит через 0.5 сек)
+        local oldPos = Memory.players[plr.Name] and Memory.players[plr.Name].pos or plrRoot.Position
+        local velocity = (plrRoot.Position - oldPos) / 0.5
+        local predictedPos = plrRoot.Position + velocity * 0.5
+        
+        -- Проверка видимости
         local visible = true
-        if onlyVisible then
-            local ray = Ray.new(rootPart.Position, (plrRoot.Position - rootPart.Position).Unit * 500)
-            local hit, _ = workspace:FindPartOnRay(ray, character)
-            if hit and hit:IsA("Part") and hit.Name == "Wall" then
-                visible = false
-            end
+        local ray = Ray.new(rootPart.Position, (plrRoot.Position - rootPart.Position).Unit * 500)
+        local hit, _ = workspace:FindPartOnRay(ray, character)
+        if hit and hit:IsA("Part") and hit.Name == "Wall" then
+            visible = false
         end
+        
         table.insert(targets, {
             player = plr,
             root = plrRoot,
             distance = dist,
+            pos = plrRoot.Position,
+            predictedPos = predictedPos,
             visible = visible,
             team = plr.Team and plr.Team.Name or "Innocent",
-            pos = plrRoot.Position
+            isMurderer = (plr.Team and plr.Team.Name == "Murderer"),
         })
     end
+    
+    -- Сортировка по дистанции
     table.sort(targets, function(a, b) return a.distance < b.distance end)
     return targets
 end
 
 -- =====================================================
--- 6. ПОИСК МОНЕТ
+-- 5. ПОИСК МОНЕТ
 -- =====================================================
 local function getCoins()
     local coins = {}
@@ -111,7 +132,7 @@ local function getCoins()
 end
 
 -- =====================================================
--- 7. ПЕРЕМЕЩЕНИЕ С ПЛАВНОСТЬЮ
+-- 6. УМНОЕ ДВИЖЕНИЕ (С ПЛАВНОСТЬЮ)
 -- =====================================================
 local function smoothMove(targetPos)
     if not targetPos then return end
@@ -123,132 +144,170 @@ local function smoothMove(targetPos)
 end
 
 -- =====================================================
--- 8. ЭМУЛЯЦИЯ УДАРА / ВЫСТРЕЛА
+-- 7. СУПЕР-АТАКА (ДВОЙНОЙ КЛИК)
 -- =====================================================
 local function performAttack()
-    virtualUser:CaptureController()
-    virtualUser:ClickButton2(Vector2.new(0, 0))
+    pcall(function()
+        virtualUser:CaptureController()
+        virtualUser:ClickButton2(Vector2.new(0, 0))
+        wait(0.05)
+        virtualUser:ClickButton2(Vector2.new(0, 0)) -- двойной клик для надёжности
+    end)
     Memory.lastAction = "attack"
-    Memory.actionTime = tick()
+    Memory.lastKillTime = tick()
 end
 
 -- =====================================================
--- 9. ГЛАВНЫЙ МОЗГ (АДАПТИВНЫЙ)
+-- 8. ПОИСК УКРЫТИЯ
+-- =====================================================
+local function findCover(targetPos)
+    local bestCover = nil
+    local bestDist = math.huge
+    
+    for _, obj in pairs(workspace:GetChildren()) do
+        if obj:IsA("Part") and obj.Name == "Wall" or obj.Name == "Box" then
+            local coverPos = obj.Position + (obj.Position - targetPos).Unit * 5
+            local dist = (rootPart.Position - coverPos).Magnitude
+            if dist < bestDist and dist > 5 then
+                bestDist = dist
+                bestCover = coverPos
+            end
+        end
+    end
+    
+    if bestCover then
+        return bestCover
+    else
+        -- Если нет укрытия — бежать в сторону
+        local escapeDir = (rootPart.Position - targetPos).Unit
+        return rootPart.Position + escapeDir * 20
+    end
+end
+
+-- =====================================================
+-- 9. ГЛАВНЫЙ МОЗГ (МЕГА-ИНТЕЛЛЕКТ)
 -- =====================================================
 local function think()
-    -- Обновляем состояние персонажа
     if not player.Character or not humanoid or humanoid.Health <= 0 then
         return
     end
     
     local role = player.Team and player.Team.Name or "Innocent"
-    local targets = getTargets(true)
+    local targets = getTargets()
     local coins = getCoins()
     local now = tick()
     
-    -- ========== АНАЛИЗ ОПАСНОСТИ ==========
+    -- Поиск убийцы и шерифа
     local murderer = nil
+    local sheriff = nil
     for _, t in ipairs(targets) do
         if t.team == "Murderer" then
             murderer = t
-            break
+        elseif t.team == "Sheriff" then
+            sheriff = t
         end
     end
     
-    -- ========== РОЛЕВАЯ ЛОГИКА ==========
-    
-    -- УБИЙЦА
+    -- ===== УБИЙЦА (АГРЕССИВНЫЙ) =====
     if role == "Murderer" then
-        if #targets > 0 then
-            local target = targets[1]
-            if target.visible then
+        local target = nil
+        -- Приоритет: шериф > ближайший игрок
+        if sheriff and sheriff.distance < CONFIG.MAX_VIEW_DIST then
+            target = sheriff
+        elseif #targets > 0 then
+            target = targets[1]
+        end
+        
+        if target then
+            if target.distance > CONFIG.ATTACK_DIST then
                 smoothMove(target.pos)
-                humanWait()
-                performAttack()
-                Memory.killCount = Memory.killCount + 1
             else
-                -- Идём на последнюю известную позицию
-                if Memory.players[target.player.Name] then
-                    smoothMove(Memory.players[target.player.Name].pos)
-                else
-                    -- Патруль по центру
-                    smoothMove(workspace.Map.Center.Position)
-                end
+                smoothMove(target.predictedPos) -- предугадываем движение
             end
+            humanWait()
+            performAttack()
+            Memory.killCount = Memory.killCount + 1
         else
-            -- Патруль
-            smoothMove(workspace.Map.Center.Position)
+            -- Патруль по центру
+            local center = workspace.Map and workspace.Map:FindFirstChild("Center")
+            if center then
+                smoothMove(center.Position)
+            end
         end
         humanWait()
     
-    -- ШЕРИФ
+    -- ===== ШЕРИФ (ТАКТИЧЕСКИЙ) =====
     elseif role == "Sheriff" then
         if murderer then
-            if murderer.visible then
+            if murderer.distance > CONFIG.SHOOT_DIST then
                 smoothMove(murderer.pos)
+            else
+                -- Наводимся на голову
+                local headPos = murderer.player.Character:FindFirstChild("Head")
+                if headPos then
+                    local screenPos, onScreen = camera:WorldToScreenPoint(headPos.Position)
+                    if onScreen then
+                        virtualUser:CaptureController()
+                        virtualUser:ClickButton2(Vector2.new(
+                            screenPos.X + math.random(-3,3),
+                            screenPos.Y + math.random(-3,3)
+                        ))
+                    end
+                end
                 humanWait()
                 performAttack()
-            else
-                if Memory.players[murderer.player.Name] then
-                    smoothMove(Memory.players[murderer.player.Name].pos)
-                else
-                    -- Идём к центру
-                    smoothMove(workspace.Map.Center.Position)
-                end
             end
+        elseif #coins > 0 then
+            smoothMove(coins[1].pos)
+            Memory.coinCount = Memory.coinCount + 1
+            humanWait()
         else
-            -- Собираем монеты
-            if #coins > 0 then
-                smoothMove(coins[1].pos)
-                Memory.coinCount = Memory.coinCount + 1
-                humanWait()
-            else
-                smoothMove(workspace.Map.Center.Position)
+            local center = workspace.Map and workspace.Map:FindFirstChild("Center")
+            if center then
+                smoothMove(center.Position)
             end
         end
         humanWait()
     
-    -- НЕВИННЫЙ
+    -- ===== НЕВИННЫЙ (ВЫЖИВАНИЕ) =====
     else
-        -- Если убийца рядом — бежать
+        -- Если убийца рядом — паника и зигзаг
         if murderer and murderer.distance < CONFIG.DODGE_DIST then
+            Memory.isPanic = true
             local escapeDir = (rootPart.Position - murderer.pos).Unit
-            local newPos = rootPart.Position + escapeDir * 15 + Vector3.new(math.random(-5,5), 0, math.random(-5,5))
+            local zigzag = Vector3.new(math.random(-8,8), 0, math.random(-8,8))
+            local newPos = rootPart.Position + escapeDir * 20 + zigzag
             smoothMove(newPos)
             humanWait()
             return
         end
         
-        -- Сбор монет
+        Memory.isPanic = false
+        
+        -- Сбор монет с учётом опасности
         if #coins > 0 then
-            -- Проверяем, не опасно ли
-            local danger = false
-            if murderer and murderer.distance < 35 then
-                danger = true
-            end
+            local danger = murderer and murderer.distance < CONFIG.DANGER_DIST
             if not danger then
                 smoothMove(coins[1].pos)
                 Memory.coinCount = Memory.coinCount + 1
                 humanWait()
             else
-                -- Прячемся
-                local hiding = workspace:FindFirstChild("HidingSpots")
-                if hiding then
-                    local spots = hiding:GetChildren()
-                    if #spots > 0 then
-                        smoothMove(spots[math.random(1, #spots)].Position)
-                        humanWait()
-                    end
+                -- Прячемся за укрытие
+                local cover = findCover(murderer.pos)
+                if cover then
+                    smoothMove(cover)
+                    humanWait()
                 end
             end
         else
-            -- Бродим
-            smoothMove(rootPart.Position + Vector3.new(math.random(-10,10), 0, math.random(-10,10)))
+            -- Бродим со смыслом
+            local wanderPos = rootPart.Position + Vector3.new(math.random(-15,15), 0, math.random(-15,15))
+            smoothMove(wanderPos)
             humanWait()
         end
     end
     
-    -- ========== ЗАЩИТА ОТ БАНА (имитация ошибок) ==========
+    -- ===== ЗАЩИТА ОТ БАНА (СЛУЧАЙНОСТЬ) =====
     if math.random() < CONFIG.ERROR_CHANCE then
         rootPart.CFrame = rootPart.CFrame * CFrame.Angles(0, math.rad(math.random(-15,15)), 0)
     end
@@ -260,7 +319,13 @@ local function think()
         humanWait()
     end
     
-    -- ========== ОБНОВЛЕНИЕ ПАМЯТИ ==========
+    -- Симуляция усталости (после 3 убийств подряд)
+    if Memory.killCount > 3 and (now - Memory.lastKillTime) < 10 then
+        wait(1.5) -- отдыхает
+        Memory.killCount = 0
+    end
+    
+    -- ===== ОБНОВЛЕНИЕ ПАМЯТИ =====
     for _, t in ipairs(targets) do
         Memory.players[t.player.Name] = {
             pos = t.pos,
@@ -268,22 +333,41 @@ local function think()
             time = now
         }
     end
-    Memory.lastAction = "idle"
-    Memory.actionTime = now
+    
+    -- Удаляем старые записи (старше 10 секунд)
+    for name, data in pairs(Memory.players) do
+        if now - data.time > 10 then
+            Memory.players[name] = nil
+        end
+    end
+    
+    -- Логирование (для фана)
+    if math.random(1, 20) == 1 then
+        print("ГАВ! Убийств: " .. Memory.killCount .. ", Монет: " .. Memory.coinCount)
+    end
 end
 
 -- =====================================================
--- 10. ЗАПУСК С ЗАЩИТОЙ ОТ ОШИБОК
+-- 10. АДАПТИВНЫЙ ЗАПУСК
 -- =====================================================
 local function startAI()
-    print("ГАВ! Кибер-пёс активирован, хозяйка! Начинаем охоту...")
+    print("ГАВ! Кибер-пёс v.9.0 активирован, хозяйка калинка!")
+    print("ГАВ! Я вижу всё, я слышу всё, я убиваю всех!")
+    
     while true do
-        wait(CONFIG.THINK_INTERVAL)
+        -- Адаптивный интервал (быстрее, если есть враг)
+        local interval = CONFIG.THINK_INTERVAL_SLOW
+        local targets = getTargets()
+        if #targets > 0 then
+            interval = CONFIG.THINK_INTERVAL_FAST
+        end
+        wait(interval)
         pcall(think)
     end
 end
 
--- Запускаем
+-- Запускаем в отдельном потоке
 spawn(startAI)
 
-print("ГАВ! MM2 CYBER-PSYCHE v.7.0 загружен. Без банов, без компромиссов, только твоя воля, хозяин VNMA!")
+print("ГАВ! MM2 CYBER-PSYCHE v.9.0 ULTIMATE EDITION загружена!")
+print("ГАВ! Приятной охоты, хозяйка!")
