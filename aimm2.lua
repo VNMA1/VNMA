@@ -1,5 +1,5 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.30.1 (WALL AVOID + SPEED BOOST)
+-- MM2 CYBER-PSYCHE v.30.2 (DYNAMIC PATROL + 60M RANGE)
 -- =====================================================
 
 local player = game.Players.LocalPlayer
@@ -22,7 +22,7 @@ local mouse = player:GetMouse()
 -- =====================================================
 local CONFIG = {
     THINK_INTERVAL = 0.08,
-    MOVE_SPEED = 45,  -- УВЕЛИЧИЛ СКОРОСТЬ!
+    MOVE_SPEED = 45,
     AIM_SMOOTHNESS = 0.7,
     DODGE_CHANCE = 0.4,
     DODGE_DIST = 25,
@@ -30,7 +30,8 @@ local CONFIG = {
     SHERIFF_SHOOT_DIST = 999,
     INNOCENT_DANGER_DIST = 15,
     WALL_AVOID_DIST = 4,
-    PATROL_CHANGE_TIME = 5,
+    PATROL_RADIUS = 60,  -- Радиус поиска новой точки!
+    PATROL_CHANGE_TIME = 4,  -- Меняем каждые 4 секунды
 }
 
 -- =====================================================
@@ -50,6 +51,8 @@ local Memory = {
     hasGun = false,
     hasKnife = false,
     lastDirection = nil,
+    stuckCounter = 0,  -- Счётчик застревания
+    lastPosition = nil,
 }
 
 local function addLog(text)
@@ -142,13 +145,15 @@ local function getAvoidDirection(targetPos)
     local dir = (targetPos - rootPart.Position).Unit
     local currentPos = rootPart.Position + Vector3.new(0, 1.5, 0)
     
-    -- Проверяем 5 направлений: прямо, вправо-вперёд, влево-вперёд, вправо, влево
+    -- Проверяем 7 направлений для лучшего обхода
     local directions = {
         {dir = dir, priority = 1},
-        {dir = (dir + Vector3.new(0.7, 0, 0.7)).Unit, priority = 2},
-        {dir = (dir - Vector3.new(0.7, 0, 0.7)).Unit, priority = 2},
-        {dir = (dir + Vector3.new(0, 0, 0.7)).Unit, priority = 3},
-        {dir = (dir - Vector3.new(0, 0, 0.7)).Unit, priority = 3},
+        {dir = (dir + Vector3.new(0.5, 0, 0.5)).Unit, priority = 2},
+        {dir = (dir - Vector3.new(0.5, 0, 0.5)).Unit, priority = 2},
+        {dir = (dir + Vector3.new(0.3, 0, 0.8)).Unit, priority = 3},
+        {dir = (dir - Vector3.new(0.3, 0, 0.8)).Unit, priority = 3},
+        {dir = (dir + Vector3.new(0.8, 0, 0.3)).Unit, priority = 3},
+        {dir = (dir - Vector3.new(0.8, 0, 0.3)).Unit, priority = 3},
         {dir = -dir, priority = 4},
     }
     
@@ -164,14 +169,15 @@ local function getAvoidDirection(targetPos)
         end
     end
     
-    -- Если все направления заблокированы - идём назад
+    -- Если все направления заблокированы - прыгаем и идём назад
     if not bestDir then
+        performJump()
         bestDir = -dir
     end
     
     -- Сглаживаем направление
     if Memory.lastDirection then
-        bestDir = (Memory.lastDirection * 0.7 + bestDir * 0.3).Unit
+        bestDir = (Memory.lastDirection * 0.6 + bestDir * 0.4).Unit
     end
     Memory.lastDirection = bestDir
     
@@ -179,7 +185,40 @@ local function getAvoidDirection(targetPos)
 end
 
 -- =====================================================
--- ДВИЖЕНИЕ (УЛУЧШЕННОЕ)
+-- ДИНАМИЧЕСКАЯ ТОЧКА ПАТРУЛЯ (ОТ ТЕКУЩЕЙ ПОЗИЦИИ!)
+-- =====================================================
+local function getRandomPatrolPoint()
+    if not rootPart then return Vector3.new(0, 5, 0) end
+    
+    local currentPos = rootPart.Position
+    
+    -- Генерируем точку в радиусе 60 метров от текущей позиции
+    local angle = math.random() * 2 * math.pi
+    local radius = 40 + math.random() * CONFIG.PATROL_RADIUS
+    local x = currentPos.X + math.cos(angle) * radius
+    local z = currentPos.Z + math.sin(angle) * radius
+    
+    -- Проверяем, чтобы точка была на земле
+    local ray = Ray.new(Vector3.new(x, currentPos.Y + 20, z), Vector3.new(0, -40, 0))
+    local hit, pos = workspace:FindPartOnRay(ray, character, false, true)
+    local y = currentPos.Y + 0.5
+    if hit then
+        y = pos.Y + 2.5
+    end
+    
+    -- Проверяем, не в стене ли точка
+    local checkPos = Vector3.new(x, y, z)
+    local dirToPoint = (checkPos - currentPos).Unit
+    if isWallAtPosition(currentPos, dirToPoint, 10) then
+        -- Если в стене - генерируем новую
+        return getRandomPatrolPoint()
+    end
+    
+    return Vector3.new(x, y, z)
+end
+
+-- =====================================================
+-- ДВИЖЕНИЕ (С ОБНАРУЖЕНИЕМ ЗАСТРЕВАНИЯ)
 -- =====================================================
 local function moveToTarget(targetPos)
     if not targetPos or not rootPart then return end
@@ -187,10 +226,32 @@ local function moveToTarget(targetPos)
     
     local distance = (targetPos - rootPart.Position).Magnitude
     
-    if distance < 1.5 then 
+    if distance < 2 then 
         stopMoving()
         return 
     end
+    
+    -- Проверка застревания
+    if Memory.lastPosition then
+        local moveDist = (rootPart.Position - Memory.lastPosition).Magnitude
+        if moveDist < 0.3 then
+            Memory.stuckCounter = Memory.stuckCounter + 1
+            if Memory.stuckCounter > 10 then
+                -- Застряли - прыгаем и меняем направление
+                performJump()
+                Memory.lastDirection = nil
+                Memory.stuckCounter = 0
+                -- Генерируем новую точку
+                if Memory.patrolTarget then
+                    Memory.patrolTarget = getRandomPatrolPoint()
+                    addLog("🔄 Застрял! Новая точка патруля!")
+                end
+            end
+        else
+            Memory.stuckCounter = 0
+        end
+    end
+    Memory.lastPosition = rootPart.Position
     
     -- Получаем направление с обходом стен
     local direction = getAvoidDirection(targetPos)
@@ -209,7 +270,7 @@ local function moveToTarget(targetPos)
         finalDir = (direction * 0.8 + Vector3.new(0, verticalOffset / CONFIG.MOVE_SPEED, 0)).Unit
     end
     
-    -- Создаём BodyVelocity (для скорости)
+    -- Создаём BodyVelocity
     local bv = rootPart:FindFirstChild("CyberMoveBV")
     if not bv then
         bv = Instance.new("BodyVelocity")
@@ -239,6 +300,8 @@ local function stopMoving()
         if bv then bv:Destroy() end
     end
     Memory.currentTarget = nil
+    Memory.lastPosition = nil
+    Memory.stuckCounter = 0
 end
 
 -- Обновление движения через RenderStepped
@@ -384,18 +447,10 @@ local function findSpawn()
     return Vector3.new(0, 5, 0)
 end
 
-local function getRandomPatrolPoint(spawnPos)
-    local angle = math.random() * 2 * math.pi
-    local radius = 30 + math.random() * 40
-    local x = spawnPos.X + math.cos(angle) * radius
-    local z = spawnPos.Z + math.sin(angle) * radius
-    return Vector3.new(x, spawnPos.Y + 0.5, z)
-end
-
 local function findHidingSpot()
     local bestSpot = nil
     local bestDist = math.huge
-    if not rootPart then return getRandomPatrolPoint(findSpawn()) end
+    if not rootPart then return getRandomPatrolPoint() end
     
     for _, obj in pairs(workspace:GetChildren()) do
         if obj:IsA("Part") and (obj.Name:lower():find("wall") or obj.Name:lower():find("box") or 
@@ -411,15 +466,13 @@ local function findHidingSpot()
     if bestSpot then
         return bestSpot
     else
-        return getRandomPatrolPoint(findSpawn())
+        return getRandomPatrolPoint()
     end
 end
 
 -- =====================================================
 -- РОЛЕВАЯ ЛОГИКА
 -- =====================================================
-local spawnPos = findSpawn()
-
 local function murdererLogic(players, coins)
     if not rootPart then return end
     
@@ -480,9 +533,9 @@ local function murdererLogic(players, coins)
     else
         Memory.patrolTimer = Memory.patrolTimer + CONFIG.THINK_INTERVAL
         if not Memory.patrolTarget or Memory.patrolTimer > CONFIG.PATROL_CHANGE_TIME then
-            Memory.patrolTarget = getRandomPatrolPoint(spawnPos)
+            Memory.patrolTarget = getRandomPatrolPoint()
             Memory.patrolTimer = 0
-            addLog("🔄 [УБИЙЦА] Новая точка патруля")
+            addLog("🔄 [УБИЙЦА] Новая точка патруля (+" .. CONFIG.PATROL_RADIUS .. "м)")
         end
         moveToTarget(Memory.patrolTarget)
     end
@@ -529,7 +582,7 @@ local function sheriffLogic(players, coins)
         else
             Memory.patrolTimer = Memory.patrolTimer + CONFIG.THINK_INTERVAL
             if not Memory.patrolTarget or Memory.patrolTimer > CONFIG.PATROL_CHANGE_TIME then
-                Memory.patrolTarget = getRandomPatrolPoint(spawnPos)
+                Memory.patrolTarget = getRandomPatrolPoint()
                 Memory.patrolTimer = 0
             end
             moveToTarget(Memory.patrolTarget)
@@ -565,7 +618,7 @@ local function innocentLogic(players, coins)
     else
         Memory.patrolTimer = Memory.patrolTimer + CONFIG.THINK_INTERVAL
         if not Memory.patrolTarget or Memory.patrolTimer > CONFIG.PATROL_CHANGE_TIME then
-            Memory.patrolTarget = getRandomPatrolPoint(spawnPos)
+            Memory.patrolTarget = getRandomPatrolPoint()
             Memory.patrolTimer = 0
         end
         moveToTarget(Memory.patrolTarget)
@@ -608,7 +661,7 @@ local function createGUI()
     title.Size = UDim2.new(1, -40, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "ГАВ! КИБЕР-ПЁС v.30.1"
+    title.Text = "ГАВ! КИБЕР-ПЁС v.30.2"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
@@ -719,6 +772,8 @@ local function restartScript()
     Memory.hasGun = false
     Memory.hasKnife = false
     Memory.lastDirection = nil
+    Memory.stuckCounter = 0
+    Memory.lastPosition = nil
     
     updateCharacter()
     
@@ -822,10 +877,10 @@ Memory.updateConnection = runService.RenderStepped:Connect(function()
     end
 end)
 
-addLogGUI("ГАВ! КИБЕР-ПЁС v.30.1 ЗАГРУЖЕН!")
-addLogGUI("ГАВ! СКОРОСТЬ 45!")
-addLogGUI("ГАВ! УМНЫЙ ОБХОД СТЕН!")
-addLogGUI("ГАВ! НЕ ТЫКАЕТСЯ В СТЕНЫ!")
+addLogGUI("ГАВ! КИБЕР-ПЁС v.30.2 ЗАГРУЖЕН!")
+addLogGUI("ГАВ! ДИНАМИЧЕСКИЙ ПАТРУЛЬ 60М!")
+addLogGUI("ГАВ! ОБХОД СТЕН 7 НАПРАВЛЕНИЙ!")
+addLogGUI("ГАВ! ОБНАРУЖЕНИЕ ЗАСТРЕВАНИЯ!")
 
 Memory.mainCoroutine = coroutine.create(mainLoop)
 coroutine.resume(Memory.mainCoroutine)
