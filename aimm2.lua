@@ -1,5 +1,5 @@
 -- =====================================================
--- MM2 CYBER-PSYCHE v.29.2 (RAYCAST + SPEED FIX + CLOSE BTN)
+-- MM2 CYBER-PSYCHE v.29.3 (STAIRS + SLOPE FIX + PRIORITY)
 -- =====================================================
 
 local player = game.Players.LocalPlayer
@@ -17,15 +17,16 @@ local guiService = game:GetService("StarterGui")
 -- НАСТРОЙКИ
 -- =====================================================
 local CONFIG = {
-    THINK_INTERVAL = 0.1,  -- Чаще обновление
-    MOVE_SPEED = 28,       -- Быстрее!
+    THINK_INTERVAL = 0.1,
+    MOVE_SPEED = 28,
     AIM_SMOOTHNESS = 0.6,
     DODGE_CHANCE = 0.5,
     DODGE_DIST = 25,
     MURDERER_ATTACK_DIST = 12,
     SHERIFF_SHOOT_DIST = 999,
     INNOCENT_DANGER_DIST = 18,
-    WALL_AVOID_DIST = 8,   -- Дистанция для обхода стен
+    WALL_AVOID_DIST = 8,
+    STAIR_CLIMB_SPEED = 15,  -- Скорость подъёма по лестницам
 }
 
 -- =====================================================
@@ -39,6 +40,7 @@ local Memory = {
     running = true,
     thread = nil,
     currentTarget = nil,
+    lastKnownMurdererPos = nil,  -- Для шерифа
 }
 
 local function addLog(text)
@@ -46,7 +48,19 @@ local function addLog(text)
 end
 
 -- =====================================================
--- РАЙКАСТ ДЛЯ ОБХОДА СТЕН
+-- ПОЛУЧЕНИЕ ВЫСОТЫ ЗЕМЛИ (ДЛЯ СКЛОНОВ)
+-- =====================================================
+local function getGroundHeight(position)
+    local ray = Ray.new(position + Vector3.new(0, 10, 0), Vector3.new(0, -20, 0))
+    local hit, pos = workspace:FindPartOnRay(ray, character, false, true)
+    if hit then
+        return pos.Y + 2.5  -- Немного выше земли
+    end
+    return position.Y  -- Если не нашли - оставляем как есть
+end
+
+-- =====================================================
+-- РАЙКАСТ ДЛЯ ОБХОДА СТЕН (С УЧЁТОМ ЛЕСТНИЦ)
 -- =====================================================
 local function isWallInFront(direction, distance)
     local ray = Ray.new(rootPart.Position, direction * distance)
@@ -54,12 +68,28 @@ local function isWallInFront(direction, distance)
     return hit ~= nil
 end
 
+local function isStairInFront(direction, distance)
+    local ray = Ray.new(rootPart.Position + Vector3.new(0, 1, 0), direction * distance)
+    local hit, pos = workspace:FindPartOnRay(ray, character, false, true)
+    if hit and (hit.Name:lower():find("stair") or hit.Name:lower():find("step") or hit.Name:lower():find("ramp")) then
+        return true
+    end
+    return false
+end
+
 local function getAvoidDirection(targetPos)
     local dir = (targetPos - rootPart.Position).Unit
     local right = Vector3.new(dir.Z, 0, -dir.X).Unit
     local left = -right
     
-    -- Проверяем три направления: прямо, вправо, влево
+    -- Проверяем лестницы (приоритет)
+    if isStairInFront(dir, CONFIG.WALL_AVOID_DIST) then
+        -- Поднимаемся по лестнице
+        local stairDir = dir + Vector3.new(0, 0.5, 0)
+        return stairDir.Unit
+    end
+    
+    -- Проверяем стены
     if not isWallInFront(dir, CONFIG.WALL_AVOID_DIST) then
         return dir
     elseif not isWallInFront(right, CONFIG.WALL_AVOID_DIST) then
@@ -67,13 +97,12 @@ local function getAvoidDirection(targetPos)
     elseif not isWallInFront(left, CONFIG.WALL_AVOID_DIST) then
         return left
     else
-        -- Если всё заблокировано - идём назад
         return -dir
     end
 end
 
 -- =====================================================
--- ДВИЖЕНИЕ ЧЕРЕЗ BODYVELOCITY (С ПОСТОЯННЫМ ОБНОВЛЕНИЕМ)
+-- ДВИЖЕНИЕ (С ФИКСАЦИЕЙ Y ДЛЯ СКЛОНОВ)
 -- =====================================================
 local function moveToTarget(targetPos)
     if not targetPos then return end
@@ -90,6 +119,24 @@ local function moveToTarget(targetPos)
     -- Получаем направление с обходом стен
     local direction = getAvoidDirection(targetPos)
     
+    -- Получаем высоту земли под ногами (для склонов)
+    local groundY = getGroundHeight(rootPart.Position)
+    local targetY = targetPos.Y
+    
+    -- Если цель выше нас (лестница/склон) - поднимаемся
+    local verticalOffset = 0
+    if targetY > rootPart.Position.Y + 2 then
+        verticalOffset = CONFIG.STAIR_CLIMB_SPEED * 0.3
+    elseif targetY < rootPart.Position.Y - 2 then
+        verticalOffset = -CONFIG.STAIR_CLIMB_SPEED * 0.3
+    end
+    
+    -- Корректируем направление с учётом высоты
+    local finalDir = direction
+    if math.abs(verticalOffset) > 0 then
+        finalDir = (direction * 0.7 + Vector3.new(0, verticalOffset / CONFIG.MOVE_SPEED, 0)).Unit
+    end
+    
     -- Создаём/обновляем BodyVelocity
     local bv = rootPart:FindFirstChild("CyberMoveBV")
     if not bv then
@@ -99,12 +146,22 @@ local function moveToTarget(targetPos)
         bv.Parent = rootPart
     end
     
-    -- Скорость зависит от дистанции (чем дальше - тем быстрее)
+    -- Скорость с учётом дистанции и высоты
     local speedMultiplier = math.min(1.2, distance / 10)
-    bv.Velocity = direction * CONFIG.MOVE_SPEED * speedMultiplier * 1.5
+    local speed = CONFIG.MOVE_SPEED * speedMultiplier * 1.5
+    
+    -- Если мы на склоне - немного прижимаем к земле
+    if math.abs(rootPart.Position.Y - groundY) < 3 then
+        bv.Velocity = Vector3.new(finalDir.X * speed, finalDir.Y * speed * 0.3, finalDir.Z * speed)
+    else
+        bv.Velocity = finalDir * speed
+    end
     
     -- Поворачиваем к цели
-    rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + direction * 2)
+    local lookDir = Vector3.new(direction.X, 0, direction.Z).Unit
+    if lookDir.Magnitude > 0.1 then
+        rootPart.CFrame = CFrame.lookAt(rootPart.Position, rootPart.Position + lookDir * 2)
+    end
     
     Memory.currentTarget = targetPos
 end
@@ -115,7 +172,7 @@ local function stopMoving()
     Memory.currentTarget = nil
 end
 
--- Постоянно обновляем движение (чтобы не тормозил)
+-- Постоянно обновляем движение
 runService.RenderStepped:Connect(function()
     if Memory.running and Memory.currentTarget then
         moveToTarget(Memory.currentTarget)
@@ -129,12 +186,22 @@ local function performJump()
 end
 
 -- =====================================================
--- АТАКА (УЛУЧШЕНА)
+-- АТАКА (С ПРОВЕРКОЙ ВИДИМОСТИ)
 -- =====================================================
+local function isTargetVisible(targetPos)
+    local ray = Ray.new(camera.CFrame.Position, (targetPos - camera.CFrame.Position).Unit * 100)
+    local hit, pos = workspace:FindPartOnRay(ray, character, false, true)
+    if not hit then return true end
+    return (pos - targetPos).Magnitude < 2
+end
+
 local function aimAt(targetPos)
     if not targetPos then return end
     local screenPos, onScreen = camera:WorldToScreenPoint(targetPos)
-    if not onScreen then return end
+    if not onScreen then 
+        -- Если не видим - стреляем по последней известной позиции
+        screenPos = camera:WorldToScreenPoint(targetPos + Vector3.new(0, 2, 0))
+    end
     
     local smoothPos = Vector2.new(
         mouse.X + (screenPos.X - mouse.X) * CONFIG.AIM_SMOOTHNESS,
@@ -238,12 +305,12 @@ local function findHidingSpot(spawnPos)
 end
 
 -- =====================================================
--- РОЛЕВАЯ ЛОГИКА (ПРИОРИТЕТ ЦЕЛЕЙ)
+-- РОЛЕВАЯ ЛОГИКА (С ПРИОРИТЕТАМИ)
 -- =====================================================
 local spawnPos = findSpawn()
 
 local function murdererLogic(players, coins)
-    -- Уклонение от шерифа (приоритет)
+    -- Уклонение от шерифа
     local sheriff = nil
     for _, p in ipairs(players) do
         if p.team == "Sheriff" and p.distance < 35 then
@@ -263,12 +330,23 @@ local function murdererLogic(players, coins)
         end
     end
     
-    -- Ищем самую близкую цель (НЕ убийцу)
+    -- Ищем цели с приоритетом: мирные > шериф > все остальные
     local target = nil
+    local priority = 0  -- 0=мирный, 1=шериф, 2=другие
     local minDist = math.huge
+    
     for _, p in ipairs(players) do
-        if p.team ~= "Murderer" and p.distance < minDist then
+        local pPriority = 2
+        if p.team == "Innocent" or p.team == "Innocent" then
+            pPriority = 0  -- Мирные - главная цель
+        elseif p.team == "Sheriff" then
+            pPriority = 1  -- Шериф - вторая цель
+        end
+        
+        -- Если приоритет выше или равный, но ближе
+        if pPriority < priority or (pPriority == priority and p.distance < minDist) then
             target = p
+            priority = pPriority
             minDist = p.distance
         end
     end
@@ -279,19 +357,18 @@ local function murdererLogic(players, coins)
             performAttack(target.pos)
             Memory.killCount = Memory.killCount + 1
             addLog("🔪 [УБИЙЦА] Убил " .. target.player.Name .. "!")
-            wait(0.3) -- Небольшая пауза после убийства
+            wait(0.3)
         else
             addLog("🏃 [УБИЙЦА] Бегу к " .. target.player.Name .. " (дист: " .. string.format("%.0f", target.distance) .. "м)")
         end
     else
-        -- Если нет целей - патрулируем
         moveToTarget(getRandomPatrolPoint(spawnPos))
         addLog("🔄 [УБИЙЦА] Патрулирую...")
     end
 end
 
 local function sheriffLogic(players, coins)
-    -- Поиск убийцы (приоритет)
+    -- Поиск убийцы (приоритет 1)
     local murderer = nil
     local minDist = math.huge
     for _, p in ipairs(players) do
@@ -302,22 +379,27 @@ local function sheriffLogic(players, coins)
     end
     
     if murderer then
+        -- Запоминаем последнюю позицию убийцы
+        Memory.lastKnownMurdererPos = murderer.pos
+        
         moveToTarget(murderer.pos)
         addLog("🏃 [ШЕРИФ] Преследую убийцу " .. murderer.player.Name .. " (дист: " .. string.format("%.0f", murderer.distance) .. "м)")
         
-        if murderer.distance <= CONFIG.SHERIFF_SHOOT_DIST then
+        -- Стреляем, даже если не видим (по последней позиции)
+        local shootPos = murderer.pos
+        if isTargetVisible(murderer.pos) then
+            -- Если видим - стреляем в голову
             local head = murderer.character:FindFirstChild("Head")
             if head then
-                local screenPos, onScreen = camera:WorldToScreenPoint(head.Position)
-                if onScreen then
-                    virtualUser:CaptureController()
-                    virtualUser:ClickButton2(Vector2.new(screenPos.X, screenPos.Y))
-                    wait(0.05)
-                end
+                shootPos = head.Position
             end
-            performAttack(murderer.pos)
-            addLog("🔫 [ШЕРИФ] Стреляю в убийцу " .. murderer.player.Name .. "!")
+        else
+            -- Если не видим - стреляем по последней известной позиции
+            shootPos = Memory.lastKnownMurdererPos or murderer.pos
         end
+        
+        performAttack(shootPos)
+        addLog("🔫 [ШЕРИФ] Стреляю в убийцу " .. murderer.player.Name .. "!")
     else
         -- Если убийцы нет - собираем монеты
         if #coins > 0 then
@@ -361,7 +443,7 @@ local function innocentLogic(players, coins)
 end
 
 -- =====================================================
--- GUI ЛОГА + КНОПКИ (С КРЕСТИКОМ)
+-- GUI ЛОГА + КНОПКИ
 -- =====================================================
 local guiVisible = true
 
@@ -371,7 +453,6 @@ local function createGUI()
     screenGui.Name = "CyberPsycheGUI"
     screenGui.ResetOnSpawn = false
     
-    -- Основной фон
     local frame = Instance.new("Frame")
     frame.Parent = screenGui
     frame.Size = UDim2.new(0, 500, 0, 350)
@@ -381,7 +462,6 @@ local function createGUI()
     frame.BorderSizePixel = 2
     frame.BorderColor3 = Color3.fromRGB(255, 0, 0)
     
-    -- Крестик (закрыть GUI)
     local closeBtn = Instance.new("TextButton")
     closeBtn.Parent = frame
     closeBtn.Size = UDim2.new(0, 30, 0, 30)
@@ -392,18 +472,16 @@ local function createGUI()
     closeBtn.TextSize = 18
     closeBtn.Font = Enum.Font.SourceSansBold
     
-    -- Заголовок
     local title = Instance.new("TextLabel")
     title.Parent = frame
     title.Size = UDim2.new(1, -40, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "ГАВ! КИБЕР-ПЁС v.29.2"
+    title.Text = "ГАВ! КИБЕР-ПЁС v.29.3"
     title.TextColor3 = Color3.fromRGB(255, 255, 255)
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
     
-    -- Лог-область
     local logFrame = Instance.new("ScrollingFrame")
     logFrame.Parent = frame
     logFrame.Size = UDim2.new(1, -10, 0, 240)
@@ -417,7 +495,6 @@ local function createGUI()
     layout.SortOrder = Enum.SortOrder.LayoutOrder
     layout.Padding = UDim.new(0, 4)
     
-    -- Кнопка СТОП
     local stopBtn = Instance.new("TextButton")
     stopBtn.Parent = frame
     stopBtn.Size = UDim2.new(0, 120, 0, 35)
@@ -428,7 +505,6 @@ local function createGUI()
     stopBtn.TextSize = 14
     stopBtn.Font = Enum.Font.SourceSansBold
     
-    -- Кнопка РЕСТАРТ
     local restartBtn = Instance.new("TextButton")
     restartBtn.Parent = frame
     restartBtn.Size = UDim2.new(0, 120, 0, 35)
@@ -494,6 +570,7 @@ local function restartScript()
     Memory.coinCount = 0
     Memory.lastAction = ""
     Memory.currentTarget = nil
+    Memory.lastKnownMurdererPos = nil
     addLogGUI("🔄 ПЕРЕЗАПУСК...")
     spawn(mainLoop)
     addLogGUI("✅ СКРИПТ ЗАПУЩЕН СНОВА!")
@@ -550,9 +627,9 @@ end
 -- =====================================================
 -- ЗАПУСК
 -- =====================================================
-addLogGUI("ГАВ! КИБЕР-ПЁС v.29.2 ЗАГРУЖЕН!")
-addLogGUI("ГАВ! РАЙКАСТ + ОБХОД СТЕН!")
-addLogGUI("ГАВ! ПОСТОЯННАЯ СКОРОСТЬ!")
-addLogGUI("ГАВ! КРЕСТИК ДЛЯ СКРЫТИЯ GUI!")
+addLogGUI("ГАВ! КИБЕР-ПЁС v.29.3 ЗАГРУЖЕН!")
+addLogGUI("ГАВ! ЛЕСТНИЦЫ И СКЛОНЫ ИСПРАВЛЕНЫ!")
+addLogGUI("ГАВ! ПРИОРИТЕТ ЦЕЛЕЙ ДЛЯ УБИЙЦЫ!")
+addLogGUI("ГАВ! ШЕРИФ СТРЕЛЯЕТ ПО ПОСЛЕДНЕЙ ПОЗИЦИИ!")
 
 spawn(mainLoop)
