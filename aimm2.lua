@@ -1,7 +1,7 @@
 -- ============================================
--- NPC EXPLORER v3.3 (COMPATIBLE + FULL FIX)
+-- NPC EXPLORER v4.1 (FIXED + SMART FOLLOW)
 -- by Цербер для хозяйки
--- Работает везде (Ray old + улучшения)
+-- Исправлено: точное следование, статус, убрано ускорение
 -- ============================================
 
 local player = game.Players.LocalPlayer
@@ -19,19 +19,21 @@ local camera = workspace.CurrentCamera
 
 -- Настройки
 local CONFIG = {
-    MOVE_SPEED = 16,
-    EXPLORE_RADIUS = 45,
-    MIN_EXPLORE_RADIUS = 12,
-    EXPLORE_CHANGE_TIME = 4,
+    MOVE_SPEED = 16,                -- Постоянная скорость (без ускорения)
+    EXPLORE_RADIUS = 40,
+    MIN_EXPLORE_RADIUS = 10,
+    EXPLORE_CHANGE_TIME = 8,
     WALL_AVOID_DIST = 3.5,
     JUMP_HEIGHT = 4,
-    TURN_SPEED = 0.15,
-    LOOK_AROUND_CHANCE = 0.15,
-    PAUSE_CHANCE = 0.08,
-    PAUSE_TIME = 1.2,
-    STUCK_THRESHOLD = 2.5,
+    TURN_SPEED = 0.5,
+    LOOK_AROUND_CHANCE = 0.05,
+    PAUSE_CHANCE = 0.02,
+    PAUSE_TIME = 0.8,
+    STUCK_THRESHOLD = 3,
     OBSTACLE_RETRY_TIME = 8,
-    PATH_STEP = 2.5,
+    PATH_STEP = 3,
+    FOLLOW_DISTANCE = 8,            -- Дистанция следования
+    FOLLOW_DEAD_ZONE = 2,           -- Мертвая зона (не двигаться если в пределах)
 }
 
 -- Память
@@ -50,8 +52,13 @@ local Memory = {
     pathParts = {},
     pathPoints = {},
     obstacleTimer = 0,
+    currentTarget = nil,
+    lastTargetUpdate = 0,
+    currentStatus = "🚶 Исследую карту",  -- Текущий статус
+    targetName = "",                     -- Имя цели
 }
 
+-- Функции логирования
 local function addLog(text)
     print("[NPC-EXPLORER] " .. text)
 end
@@ -65,7 +72,7 @@ local function updateCharacter()
     humanoid = character:FindFirstChild("Humanoid")
     rootPart = character:FindFirstChild("HumanoidRootPart")
     if humanoid and rootPart then
-        humanoid.WalkSpeed = CONFIG.MOVE_SPEED
+        humanoid.WalkSpeed = CONFIG.MOVE_SPEED  -- Постоянная скорость
         humanoid.JumpPower = 55
         humanoid.AutoRotate = false
         return true
@@ -76,7 +83,7 @@ updateCharacter()
 player.CharacterAdded:Connect(updateCharacter)
 
 -- ============================================
--- 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (СТАРЫЕ RAY)
+-- 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (RAYCAST)
 -- ============================================
 local function getGroundPosition(pos)
     local ray = Ray.new(pos + Vector3.new(0, 10, 0), Vector3.new(0, -30, 0))
@@ -132,7 +139,23 @@ local function hasGroundAhead(direction, distance)
 end
 
 -- ============================================
--- 3. УПРАВЛЕНИЕ WASD
+-- 3. УПРАВЛЕНИЕ КАМЕРОЙ
+-- ============================================
+local function rotateCameraTo(targetPos)
+    if not rootPart or not targetPos then return end
+    
+    local currentPos = rootPart.Position
+    local lookDirection = (targetPos - currentPos).Unit
+    lookDirection = Vector3.new(lookDirection.X, 0, lookDirection.Z).Unit
+    
+    if lookDirection.Magnitude < 0.1 then return end
+    
+    local targetCFrame = CFrame.lookAt(currentPos, currentPos + lookDirection * 10)
+    camera.CFrame = camera.CFrame:Lerp(targetCFrame, CONFIG.TURN_SPEED)
+end
+
+-- ============================================
+-- 4. УПРАВЛЕНИЕ WASD (ЭМУЛЯЦИЯ)
 -- ============================================
 local function pressKey(key)
     pcall(function()
@@ -192,7 +215,7 @@ local function stopWASD()
 end
 
 -- ============================================
--- 4. ВЫБОР ЦЕЛИ (ALT + ПКМ)
+-- 5. ВЫБОР ЦЕЛИ (ALT + ПКМ)
 -- ============================================
 local altPressed = false
 
@@ -217,16 +240,19 @@ mouse.Button2Down:Connect(function()
             local plr = game.Players:GetPlayerFromCharacter(targetPart.Parent)
             if plr and plr ~= player then
                 Memory.targetPlayer = plr
+                Memory.targetName = plr.Name
+                Memory.currentStatus = "🎯 Преследую " .. plr.Name
                 addLog("🎯 Цель выбрана: " .. plr.Name)
                 if Memory.targetHighlight then Memory.targetHighlight:Destroy() end
-                local hl = Instance.new("Highlight")
-                hl.Parent = plr.Character
-                hl.FillColor = Color3.fromRGB(0, 255, 0)
-                hl.FillTransparency = 0.4
-                hl.OutlineColor = Color3.fromRGB(0, 255, 0)
-                hl.OutlineTransparency = 0.2
-                Memory.targetHighlight = hl
+                local highlight = Instance.new("Highlight")
+                highlight.Parent = plr.Character
+                highlight.FillColor = Color3.fromRGB(0, 255, 0)
+                highlight.FillTransparency = 0.3
+                highlight.OutlineColor = Color3.fromRGB(0, 200, 0)
+                Memory.targetHighlight = highlight
                 clearPath()
+                -- Обновляем GUI
+                updateGUIStatus()
             end
         end
     end
@@ -235,16 +261,19 @@ end)
 game.Players.PlayerRemoving:Connect(function(plr)
     if plr == Memory.targetPlayer then
         Memory.targetPlayer = nil
+        Memory.targetName = ""
+        Memory.currentStatus = "🚶 Исследую карту"
         if Memory.targetHighlight then
             Memory.targetHighlight:Destroy()
             Memory.targetHighlight = nil
         end
         addLog("❌ Цель покинула игру")
+        updateGUIStatus()
     end
 end)
 
 -- ============================================
--- 5. ПУТЬ (ОРАНЖЕВЫЙ)
+-- 6. ОТОБРАЖЕНИЕ ПУТИ
 -- ============================================
 local function clearPath()
     for _, part in pairs(Memory.pathParts) do
@@ -272,6 +301,7 @@ local function drawPath(targetPos)
         else
             point = Vector3.new(point.X, startPos.Y, point.Z)
         end
+        table.insert(Memory.pathPoints, point)
         local part = Instance.new("Part")
         part.Size = Vector3.new(0.4, 0.1, 0.4)
         part.Position = point
@@ -286,7 +316,7 @@ local function drawPath(targetPos)
 end
 
 -- ============================================
--- 6. ESP (АККУРАТНЫЙ КОНТУР)
+-- 7. ESP
 -- ============================================
 local espHighlights = {}
 local espNameplates = {}
@@ -303,12 +333,12 @@ local function updateESP()
         local char = plr.Character
         
         if plr == Memory.targetPlayer then
-            -- зелёная подсветка уже создана
+            -- Уже есть зеленая подсветка
         else
             local hl = Instance.new("Highlight")
             hl.Parent = char
             hl.FillColor = Color3.fromRGB(255, 255, 255)
-            hl.FillTransparency = 1
+            hl.FillTransparency = 0.9
             hl.OutlineColor = Color3.fromRGB(255, 255, 255)
             hl.OutlineTransparency = 0.3
             hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
@@ -336,23 +366,16 @@ end
 
 players.PlayerAdded:Connect(updateESP)
 players.PlayerRemoving:Connect(updateESP)
-local oldTarget = nil
-runService.Heartbeat:Connect(function()
-    if Memory.targetPlayer ~= oldTarget then
-        oldTarget = Memory.targetPlayer
-        updateESP()
-    end
-end)
 updateESP()
 
 -- ============================================
--- 7. ГЕНЕРАЦИЯ ТОЧЕК
+-- 8. ГЕНЕРАЦИЯ ТОЧЕК
 -- ============================================
 local function getExplorePoint()
     if not rootPart then return nil end
     local currentPos = rootPart.Position
     local attempts = 0
-    while attempts < 35 do
+    while attempts < 30 do
         attempts = attempts + 1
         local angle = math.random() * 2 * math.pi
         local radius = CONFIG.MIN_EXPLORE_RADIUS + math.random() * (CONFIG.EXPLORE_RADIUS - CONFIG.MIN_EXPLORE_RADIUS)
@@ -376,7 +399,7 @@ local function getExplorePoint()
 end
 
 -- ============================================
--- 8. УМНЫЙ ОБХОД
+-- 9. УМНЫЙ ОБХОД
 -- ============================================
 local function findClearDirection(targetPos)
     if not rootPart then return (targetPos - rootPart.Position).Unit end
@@ -391,7 +414,6 @@ local function findClearDirection(targetPos)
         {dir = (dir - right * 0.5).Unit, angle = -30},
         {dir = (dir + right * 0.8).Unit, angle = 50},
         {dir = (dir - right * 0.8).Unit, angle = -50},
-        {dir = -dir, angle = 180},
     }
     
     local best = nil
@@ -419,94 +441,109 @@ local function findClearDirection(targetPos)
 end
 
 -- ============================================
--- 9. ДВИЖЕНИЕ
+-- 10. ДВИЖЕНИЕ (ОБНОВЛЕНО - ТОЧНОЕ СЛЕДОВАНИЕ)
 -- ============================================
 local function moveToTarget(targetPos)
     if not rootPart or not targetPos then return end
     local distance = getDistance(rootPart.Position, targetPos)
-    if distance < 0.8 then
+    
+    -- Если цель - игрок, проверяем дистанцию
+    if Memory.targetPlayer then
+        local followDist = CONFIG.FOLLOW_DISTANCE
+        local deadZone = CONFIG.FOLLOW_DEAD_ZONE
+        
+        -- Если в мертвой зоне - стоим
+        if distance < followDist - deadZone then
+            stopWASD()
+            Memory.isMoving = false
+            Memory.currentStatus = "🧍 Жду " .. Memory.targetName .. " (8м)"
+            updateGUIStatus()
+            return
+        end
+        
+        -- Обновляем статус
+        if distance > followDist + 5 then
+            Memory.currentStatus = "🏃 Догоняю " .. Memory.targetName .. " (" .. math.floor(distance) .. "м)"
+        else
+            Memory.currentStatus = "🚶 Следую за " .. Memory.targetName .. " (" .. math.floor(distance) .. "м)"
+        end
+        updateGUIStatus()
+    end
+    
+    if distance < 1.5 then
         stopWASD()
         Memory.isMoving = false
         return
     end
     
-    local targetY = getHeightAt(targetPos)
-    if targetY then
-        targetPos = Vector3.new(targetPos.X, targetY + 0.5, targetPos.Z)
-    end
-    
+    -- Проверка на обрыв
     local dir = (targetPos - rootPart.Position).Unit
-    
     if not hasGroundAhead(dir, 2) then
         stopWASD()
-        addLog("⚠️ Обрыв! Меняю точку")
         Memory.exploreTarget = getExplorePoint()
+        Memory.currentStatus = "⚠️ Обрыв! Ищу обход"
+        updateGUIStatus()
         return
     end
     
+    -- Умный обход препятствий
     local finalDir = findClearDirection(targetPos)
     
+    -- Проверка застревания
     if finalDir ~= dir and (finalDir - dir).Magnitude > 0.3 then
         Memory.obstacleTimer = Memory.obstacleTimer + 0.05
         if Memory.obstacleTimer > CONFIG.OBSTACLE_RETRY_TIME then
-            addLog("⏰ Не могу пройти 8 сек! Меняю цель")
             Memory.exploreTarget = getExplorePoint()
             Memory.obstacleTimer = 0
+            Memory.currentStatus = "🔄 Обхожу препятствие"
+            updateGUIStatus()
             return
         end
     else
         Memory.obstacleTimer = 0
     end
     
+    -- Прыжки через препятствия
     if canJumpOver(rootPart.Position, finalDir) and isOnGround() and not Memory.isJumping then
         Memory.isJumping = true
         pressKey(Enum.KeyCode.Space)
-        wait(0.12)
+        wait(0.1)
         releaseKey(Enum.KeyCode.Space)
         Memory.isJumping = false
     end
     
+    -- Движение
     moveDirection(finalDir)
     Memory.isMoving = true
 end
 
 -- ============================================
--- 10. ОСМОТР
+-- 11. GUI СТАТУС (НОВОЕ)
 -- ============================================
-local function lookAtTarget(targetPos)
-    if not rootPart or not targetPos then return
-    local head = character:FindFirstChild("Head")
-    if head then
-        local lookDir = (targetPos - head.Position).Unit
-        local targetCFrame = CFrame.lookAt(head.Position, head.Position + lookDir * 10)
-        head.CFrame = head.CFrame:Lerp(targetCFrame, 0.15)
-    end
-end
+local statusLabel = nil
 
-local function lookAround()
-    local head = character:FindFirstChild("Head")
-    if head then
-        local angleY = math.rad(math.random(-35, 35))
-        local angleX = math.rad(math.random(-8, 8))
-        local lookAt = rootPart.CFrame * CFrame.Angles(0, angleY, 0) * CFrame.Angles(angleX, 0, 0)
-        head.CFrame = head.CFrame:Lerp(lookAt, 0.2)
+local function updateGUIStatus()
+    if statusLabel then
+        statusLabel.Text = Memory.currentStatus
     end
 end
 
 -- ============================================
--- 11. ОСНОВНАЯ ЛОГИКА
+-- 12. ОСНОВНАЯ ЛОГИКА (ОБНОВЛЕНО)
 -- ============================================
 local function npcBehavior()
     if not rootPart or not humanoid then return end
     
+    -- Проверка застревания
     if Memory.lastPosition then
         local moveDist = getDistance(rootPart.Position, Memory.lastPosition)
         if moveDist < 0.15 then
             Memory.stuckTimer = Memory.stuckTimer + 0.05
             if Memory.stuckTimer > CONFIG.STUCK_THRESHOLD then
-                addLog("🔄 Застрял! Меняю точку")
                 Memory.exploreTarget = getExplorePoint()
                 Memory.stuckTimer = 0
+                Memory.currentStatus = "🔄 Застрял! Меняю направление"
+                updateGUIStatus()
                 pressKey(Enum.KeyCode.Space)
                 wait(0.1)
                 releaseKey(Enum.KeyCode.Space)
@@ -517,16 +554,43 @@ local function npcBehavior()
     end
     Memory.lastPosition = rootPart.Position
     
+    -- ЕСЛИ ЕСТЬ ЦЕЛЬ
     if Memory.targetPlayer and Memory.targetPlayer.Character then
         local targetRoot = Memory.targetPlayer.Character:FindFirstChild("HumanoidRootPart")
         if targetRoot then
             local targetPos = targetRoot.Position
-            humanoid.WalkSpeed = CONFIG.MOVE_SPEED
+            local dist = getDistance(rootPart.Position, targetPos)
+            
+            -- Поворачиваем камеру к цели
+            rotateCameraTo(targetPos)
+            
+            -- Рисуем путь
             drawPath(targetPos)
-            moveToTarget(targetPos)
-            lookAtTarget(targetPos)
+            
+            -- Если далеко - идем, если близко - стоим
+            if dist > CONFIG.FOLLOW_DISTANCE - CONFIG.FOLLOW_DEAD_ZONE then
+                moveToTarget(targetPos)
+            else
+                stopWASD()
+                Memory.isMoving = false
+                Memory.currentStatus = "🧍 Жду " .. Memory.targetName .. " (" .. math.floor(dist) .. "м)"
+                updateGUIStatus()
+                -- Иногда смотрим по сторонам
+                if math.random() < 0.02 then
+                    local head = character:FindFirstChild("Head")
+                    if head then
+                        head.CFrame = head.CFrame * CFrame.Angles(0, math.rad(math.random(-30, 30)), 0)
+                    end
+                end
+            end
             return
         end
+    end
+    
+    -- ИССЛЕДОВАНИЕ
+    if Memory.targetPlayer == nil then
+        Memory.currentStatus = "🚶 Исследую карту"
+        updateGUIStatus()
     end
     
     Memory.exploreTimer = Memory.exploreTimer + 0.05
@@ -536,7 +600,8 @@ local function npcBehavior()
         if Memory.pauseTimer <= 0 then
             Memory.isPaused = false
             Memory.exploreTarget = getExplorePoint()
-            addLog("🚶 Продолжаю движение")
+            Memory.currentStatus = "🚶 Продолжаю исследование"
+            updateGUIStatus()
         end
         return
     end
@@ -544,20 +609,15 @@ local function npcBehavior()
     if not Memory.exploreTarget or Memory.exploreTimer > CONFIG.EXPLORE_CHANGE_TIME then
         Memory.exploreTarget = getExplorePoint()
         Memory.exploreTimer = 0
-        if Memory.exploreTarget then
-            addLog("🔍 Новая точка исследования")
-        end
     end
     
-    if math.random() < CONFIG.LOOK_AROUND_CHANCE then
-        lookAround()
-    end
-    
+    -- Случайная пауза (очень редко)
     if math.random() < CONFIG.PAUSE_CHANCE and not Memory.isPaused then
         Memory.isPaused = true
         Memory.pauseTimer = CONFIG.PAUSE_TIME * (0.5 + math.random() * 0.5)
         stopWASD()
-        addLog("⏸ Пауза на " .. string.format("%.1f", Memory.pauseTimer) .. "с")
+        Memory.currentStatus = "⏸ Пауза..."
+        updateGUIStatus()
         return
     end
     
@@ -565,11 +625,12 @@ local function npcBehavior()
         local dist = getDistance(rootPart.Position, Memory.exploreTarget)
         if dist < 2 then
             Memory.exploreTarget = getExplorePoint()
-            if math.random() < 0.3 then
+            if math.random() < 0.2 then
                 stopWASD()
-                wait(0.3)
+                wait(0.2)
             end
         else
+            rotateCameraTo(Memory.exploreTarget)
             drawPath(Memory.exploreTarget)
             moveToTarget(Memory.exploreTarget)
         end
@@ -579,7 +640,7 @@ local function npcBehavior()
 end
 
 -- ============================================
--- 12. ГЛАВНЫЙ ЦИКЛ
+-- 13. ГЛАВНЫЙ ЦИКЛ
 -- ============================================
 local function mainLoop()
     while Memory.running do
@@ -599,7 +660,7 @@ local function mainLoop()
 end
 
 -- ============================================
--- 13. GUI (С КНОПКОЙ СТОП)
+-- 14. GUI (ОБНОВЛЕН - ДОБАВЛЕН СТАТУС)
 -- ============================================
 local guiVisible = true
 local function createGUI()
@@ -610,8 +671,8 @@ local function createGUI()
     
     local frame = Instance.new("Frame")
     frame.Parent = screenGui
-    frame.Size = UDim2.new(0, 340, 0, 180)
-    frame.Position = UDim2.new(0.5, -170, 1, -190)
+    frame.Size = UDim2.new(0, 380, 0, 210)  -- Увеличен размер
+    frame.Position = UDim2.new(0.5, -190, 1, -220)
     frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     frame.BackgroundTransparency = 0.85
     frame.BorderSizePixel = 2
@@ -632,36 +693,58 @@ local function createGUI()
     title.Size = UDim2.new(1, -35, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "🐕 NPC EXPLORER v3.3"
+    title.Text = "🐕 NPC EXPLORER v4.1"
     title.TextColor3 = Color3.fromRGB(255, 165, 0)
     title.TextSize = 16
     title.Font = Enum.Font.SourceSansBold
     
+    -- СТАТУС (НОВЫЙ)
+    local statusBg = Instance.new("Frame")
+    statusBg.Parent = frame
+    statusBg.Size = UDim2.new(0.95, 0, 0, 35)
+    statusBg.Position = UDim2.new(0.025, 0, 0, 35)
+    statusBg.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    statusBg.BackgroundTransparency = 0.5
+    statusBg.BorderSizePixel = 1
+    statusBg.BorderColor3 = Color3.fromRGB(255, 165, 0)
+    
+    statusLabel = Instance.new("TextLabel")
+    statusLabel.Parent = statusBg
+    statusLabel.Size = UDim2.new(1, 0, 1, 0)
+    statusLabel.Position = UDim2.new(0, 0, 0, 0)
+    statusLabel.BackgroundTransparency = 1
+    statusLabel.Text = "🚶 Исследую карту"
+    statusLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    statusLabel.TextSize = 14
+    statusLabel.Font = Enum.Font.SourceSansBold
+    statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    statusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    
     local info1 = Instance.new("TextLabel")
     info1.Parent = frame
     info1.Size = UDim2.new(1, 0, 0, 20)
-    info1.Position = UDim2.new(0, 0, 0, 32)
+    info1.Position = UDim2.new(0, 0, 0, 75)
     info1.BackgroundTransparency = 1
-    info1.Text = "🚶 Исследует карту (WASD)"
+    info1.Text = "🎯 Alt+ПКМ = следовать за игроком"
     info1.TextColor3 = Color3.fromRGB(200, 200, 200)
     info1.TextSize = 12
     
     local info2 = Instance.new("TextLabel")
     info2.Parent = frame
     info2.Size = UDim2.new(1, 0, 0, 20)
-    info2.Position = UDim2.new(0, 0, 0, 52)
+    info2.Position = UDim2.new(0, 0, 0, 95)
     info2.BackgroundTransparency = 1
-    info2.Text = "🎯 Alt+ПКМ = следовать за игроком"
-    info2.TextColor3 = Color3.fromRGB(200, 200, 200)
+    info2.Text = "📏 Дистанция до цели: 8 метров"
+    info2.TextColor3 = Color3.fromRGB(255, 200, 100)
     info2.TextSize = 12
     
     local info3 = Instance.new("TextLabel")
     info3.Parent = frame
     info3.Size = UDim2.new(1, 0, 0, 20)
-    info3.Position = UDim2.new(0, 0, 0, 72)
+    info3.Position = UDim2.new(0, 0, 0, 115)
     info3.BackgroundTransparency = 1
     info3.Text = "🟧 Оранжевый путь до цели"
-    info3.TextColor3 = Color3.fromRGB(255, 200, 100)
+    info3.TextColor3 = Color3.fromRGB(200, 200, 200)
     info3.TextSize = 12
     
     local stopBtn = Instance.new("TextButton")
@@ -696,7 +779,7 @@ end
 local gui = createGUI()
 
 -- ============================================
--- 14. УПРАВЛЕНИЕ
+-- 15. УПРАВЛЕНИЕ
 -- ============================================
 local function stopScript()
     Memory.running = false
@@ -707,6 +790,8 @@ local function stopScript()
     for _, np in pairs(espNameplates) do np:Destroy() end
     espHighlights = {}
     espNameplates = {}
+    Memory.currentStatus = "⏹ Остановлен"
+    updateGUIStatus()
     addLog("⏹ СКРИПТ ОСТАНОВЛЕН")
 end
 
@@ -723,10 +808,13 @@ local function restartScript()
     Memory.pauseTimer = 0
     Memory.lastPosition = nil
     Memory.targetPlayer = nil
+    Memory.targetName = ""
     Memory.obstacleTimer = 0
+    Memory.currentStatus = "🚶 Исследую карту"
     if Memory.targetHighlight then Memory.targetHighlight:Destroy() end
     clearPath()
     updateESP()
+    updateGUIStatus()
     addLog("🔄 Скрипт перезапущен")
     spawn(mainLoop)
 end
@@ -740,13 +828,14 @@ gui.stopBtn.MouseButton1Click:Connect(stopScript)
 gui.restartBtn.MouseButton1Click:Connect(restartScript)
 
 -- ============================================
--- 15. ЗАПУСК
+-- 16. ЗАПУСК
 -- ============================================
-addLog("🐕 NPC EXPLORER v3.3 ЗАГРУЖЕН!")
+addLog("🐕 NPC EXPLORER v4.1 ЗАГРУЖЕН!")
 addLog("🚶 Движение через WASD (эмуляция)")
 addLog("🟧 Оранжевый путь до цели")
 addLog("👁️ ESP: белый контур, цель – зелёная")
-addLog("⏹ Кнопка СТОП добавлена")
+addLog("📏 Дистанция до цели: 8 метров")
+addLog("📊 Статус отображается в GUI")
 
 spawn(mainLoop)
 
@@ -755,6 +844,8 @@ player.CharacterAdded:Connect(function()
     updateCharacter()
     Memory.exploreTarget = nil
     Memory.lastPosition = nil
+    Memory.currentStatus = "🔄 Персонаж обновлён"
     updateESP()
+    updateGUIStatus()
     addLog("🔄 Персонаж обновлён")
 end)
