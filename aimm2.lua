@@ -1,8 +1,7 @@
 -- ============================================
--- FARMER AI v1.0 (PEACEFUL EXPLORER)
+-- FARMER AI v1.1 (FIXED PATH + STABILITY)
 -- by Цербер для хозяйки
--- Мирный ИИ для фарма часов/исследования карты
--- Без атаки, без агрессии
+-- Исправлено: путь, застревание, смена точек
 -- ============================================
 
 local player = game.Players.LocalPlayer
@@ -20,24 +19,24 @@ local head = character:WaitForChild("Head")
 local camera = workspace.CurrentCamera
 
 -- ============================================
--- НАСТРОЙКИ МИРНОГО ИИ
+-- НАСТРОЙКИ (ИСПРАВЛЕНЫ)
 -- ============================================
 local CONFIG = {
     -- Движение
-    MOVE_SPEED = 14,               -- Скорость ходьбы (чуть медленнее бега)
-    EXPLORE_RADIUS = 80,           -- Радиус исследования
-    MIN_EXPLORE_RADIUS = 20,
-    EXPLORE_CHANGE_TIME = 10,      -- Время до смены точки
-    FOLLOW_DISTANCE = 5,           -- Дистанция следования за другом
-    PATH_UPDATE_INTERVAL = 1.0,
-    STUCK_THRESHOLD = 4,
+    MOVE_SPEED = 16,
+    EXPLORE_RADIUS = 100,
+    MIN_EXPLORE_RADIUS = 25,
+    EXPLORE_CHANGE_TIME = 15,      -- НОВОЕ: 15 секунд до смены точки
+    FOLLOW_DISTANCE = 5,
+    PATH_UPDATE_INTERVAL = 2.0,    -- ИСПРАВЛЕНО: 2 секунды (было 1.0)
+    STUCK_THRESHOLD = 6,           -- ИСПРАВЛЕНО: 6 секунд застревания (было 4)
     JUMP_FORCE = 50,
-    WAYPOINT_REACH_DIST = 1.2,
+    WAYPOINT_REACH_DIST = 2.0,     -- ИСПРАВЛЕНО: 2 студия (было 1.2)
+    MAX_PATH_ATTEMPTS = 3,         -- НОВОЕ: попыток построить путь
     
     -- Поведение
-    PAUSE_CHANCE = 0.15,           -- Шанс остановиться (осмотреться)
-    PAUSE_TIME = 3.0,              -- Время остановки
-    LOOK_AROUND_CHANCE = 0.3,      -- Шанс повернуть голову
+    PAUSE_CHANCE = 0.12,
+    PAUSE_TIME = 3.0,
 }
 
 -- ============================================
@@ -58,8 +57,9 @@ local Memory = {
     pathParts = {},
     lastPathUpdate = 0,
     lastTargetPosition = nil,
+    pathAttempts = 0,              -- НОВОЕ: счётчик попыток
     
-    -- Режим "друг" (следование за игроком)
+    -- Режим "друг"
     friendTarget = nil,
     friendHighlight = nil,
     isFriendMode = false,
@@ -110,7 +110,7 @@ local function getHeightAt(position)
     local rayParams = RaycastParams.new()
     rayParams.FilterDescendantsInstances = {character}
     rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-    local rayResult = workspace:Raycast(position + Vector3.new(0, 10, 0), Vector3.new(0, -25, 0), rayParams)
+    local rayResult = workspace:Raycast(position + Vector3.new(0, 15, 0), Vector3.new(0, -30, 0), rayParams)
     if rayResult then
         return rayResult.Position.Y
     end
@@ -118,17 +118,17 @@ local function getHeightAt(position)
 end
 
 -- ============================================
--- 3. PATHFINDING SERVICE
+-- 3. PATHFINDING SERVICE (ИСПРАВЛЕН)
 -- ============================================
 local function computePath(targetPosition)
     if not rootPart or not targetPosition then return nil end
     
     local pathParams = {
-        AgentRadius = 1.5,
-        AgentHeight = 4,
+        AgentRadius = 2.0,          -- ИСПРАВЛЕНО: больше радиус (было 1.5)
+        AgentHeight = 5,
         AgentCanJump = true,
         AgentCanClimb = true,
-        WaypointSpacing = 2,
+        WaypointSpacing = 5,        -- ИСПРАВЛЕНО: реже точки (было 2)
     }
     
     local path = pathfindingService:CreatePath(pathParams)
@@ -145,9 +145,17 @@ end
 
 local function getWaypoints(path)
     local waypoints = {}
+    local lastPos = nil
     for _, waypoint in ipairs(path:GetWaypoints()) do
+        -- Пропускаем слишком близкие точки (чтобы не было "ползком")
+        if lastPos then
+            if getDistance(lastPos, waypoint.Position) < 3 then
+                continue
+            end
+        end
+        lastPos = waypoint.Position
         table.insert(waypoints, {
-            position = waypoint.Position,
+            position = waypoint.Position + Vector3.new(0, 1.0, 0), -- ПОДНЯТЫ ТОЧКИ!
             action = waypoint.Action
         })
     end
@@ -155,7 +163,7 @@ local function getWaypoints(path)
 end
 
 -- ============================================
--- 4. ОТОБРАЖЕНИЕ ПУТИ (СИНИЙ)
+-- 4. ОТОБРАЖЕНИЕ ПУТИ (ПОДНЯТЫ ТОЧКИ)
 -- ============================================
 local function clearPath()
     for _, part in pairs(Memory.pathParts) do
@@ -170,13 +178,13 @@ local function drawPath(waypoints)
     
     for i, waypoint in ipairs(waypoints) do
         local part = Instance.new("Part")
-        part.Size = Vector3.new(0.4, 0.1, 0.4)
-        part.Position = waypoint.position + Vector3.new(0, 0.2, 0)
+        part.Size = Vector3.new(0.6, 0.2, 0.6)     -- БОЛЬШЕ РАЗМЕР
+        part.Position = waypoint.position + Vector3.new(0, 0.5, 0) -- ВЫШЕ
         part.Anchored = true
         part.CanCollide = false
         part.Material = Enum.Material.Neon
-        part.BrickColor = BrickColor.new("Bright blue")  -- Синий путь (мирный)
-        part.Transparency = 0.5
+        part.BrickColor = BrickColor.new("Bright blue")
+        part.Transparency = 0.4
         part.Parent = workspace
         table.insert(Memory.pathParts, part)
     end
@@ -254,7 +262,7 @@ local function moveToWaypoint(waypoint)
 end
 
 -- ============================================
--- 6. ПЕРЕМЕЩЕНИЕ К ТОЧКЕ
+-- 6. ПЕРЕМЕЩЕНИЕ К ТОЧКЕ (ИСПРАВЛЕНО)
 -- ============================================
 local function moveToPosition(targetPos)
     if not rootPart or not targetPos then return end
@@ -262,13 +270,17 @@ local function moveToPosition(targetPos)
     local timeNow = tick()
     local shouldUpdatePath = false
     
+    -- Обновляем путь ТОЛЬКО если:
+    -- 1. Нет пути
+    -- 2. Закончились точки
+    -- 3. Прошло 2 секунды И цель сдвинулась >5 студий
     if not Memory.path then
         shouldUpdatePath = true
     elseif Memory.currentWaypoint > #Memory.path then
         shouldUpdatePath = true
     elseif (timeNow - Memory.lastPathUpdate) > CONFIG.PATH_UPDATE_INTERVAL then
         if Memory.lastTargetPosition then
-            if getDistance(Memory.lastTargetPosition, targetPos) > 3 then
+            if getDistance(Memory.lastTargetPosition, targetPos) > 5 then
                 shouldUpdatePath = true
             end
         else
@@ -283,8 +295,18 @@ local function moveToPosition(targetPos)
             Memory.currentWaypoint = 1
             Memory.lastPathUpdate = timeNow
             Memory.lastTargetPosition = targetPos
+            Memory.pathAttempts = 0
             drawPath(Memory.path)
         else
+            Memory.pathAttempts = Memory.pathAttempts + 1
+            if Memory.pathAttempts > CONFIG.MAX_PATH_ATTEMPTS then
+                -- Если не можем построить путь, выбираем новую точку
+                Memory.exploreTarget = getExplorePoint()
+                Memory.pathAttempts = 0
+                addLog("⚠️ Не могу построить путь, меняю точку")
+                return
+            end
+            -- Прыжок, чтобы "перезагрузить" положение
             if isOnGround() and not Memory.isJumping then
                 Memory.isJumping = true
                 pressKey(Enum.KeyCode.Space)
@@ -296,32 +318,36 @@ local function moveToPosition(targetPos)
         end
     end
     
+    -- Двигаемся по точкам пути
     if Memory.path and Memory.currentWaypoint <= #Memory.path then
         local currentWaypoint = Memory.path[Memory.currentWaypoint]
         local reached = moveToWaypoint(currentWaypoint)
         
-        -- Проверка на застревание
-        if Memory.lastPosition then
-            local moveDist = getDistance(rootPart.Position, Memory.lastPosition)
-            if moveDist < 0.2 then
-                Memory.stuckTimer = Memory.stuckTimer + 0.05
-                if Memory.stuckTimer > CONFIG.STUCK_THRESHOLD then
-                    Memory.path = nil
-                    Memory.currentWaypoint = 1
-                    Memory.stuckTimer = 0
-                    if isOnGround() and not Memory.isJumping then
-                        Memory.isJumping = true
-                        pressKey(Enum.KeyCode.Space)
-                        wait(0.15)
-                        releaseKey(Enum.KeyCode.Space)
-                        Memory.isJumping = false
+        -- Проверка на застревание (увеличен порог)
+        if Memory.isMoving then
+            if Memory.lastPosition then
+                local moveDist = getDistance(rootPart.Position, Memory.lastPosition)
+                if moveDist < 0.3 then          -- ИСПРАВЛЕНО: 0.3 (было 0.2)
+                    Memory.stuckTimer = Memory.stuckTimer + 0.05
+                    if Memory.stuckTimer > CONFIG.STUCK_THRESHOLD then
+                        addLog("🔄 Застрял! Пересчёт пути")
+                        Memory.path = nil
+                        Memory.currentWaypoint = 1
+                        Memory.stuckTimer = 0
+                        if isOnGround() and not Memory.isJumping then
+                            Memory.isJumping = true
+                            pressKey(Enum.KeyCode.Space)
+                            wait(0.15)
+                            releaseKey(Enum.KeyCode.Space)
+                            Memory.isJumping = false
+                        end
                     end
+                else
+                    Memory.stuckTimer = 0
                 end
-            else
-                Memory.stuckTimer = 0
             end
+            Memory.lastPosition = rootPart.Position
         end
-        Memory.lastPosition = rootPart.Position
         
         if reached then
             Memory.currentWaypoint = Memory.currentWaypoint + 1
@@ -334,28 +360,30 @@ local function moveToPosition(targetPos)
 end
 
 -- ============================================
--- 7. ГЕНЕРАЦИЯ ТОЧЕК ДЛЯ ИССЛЕДОВАНИЯ
+-- 7. ГЕНЕРАЦИЯ ТОЧЕК (ИСПРАВЛЕНА)
 -- ============================================
 local function getExplorePoint()
     if not rootPart then return nil end
     local currentPos = rootPart.Position
     local attempts = 0
-    while attempts < 30 do
+    while attempts < 40 do
         attempts = attempts + 1
         local angle = math.random() * 2 * math.pi
         local radius = CONFIG.MIN_EXPLORE_RADIUS + math.random() * (CONFIG.EXPLORE_RADIUS - CONFIG.MIN_EXPLORE_RADIUS)
         local x = currentPos.X + math.cos(angle) * radius
         local z = currentPos.Z + math.sin(angle) * radius
-        local groundY = getHeightAt(Vector3.new(x, currentPos.Y + 10, z))
+        local groundY = getHeightAt(Vector3.new(x, currentPos.Y + 15, z))
         if groundY then
-            local point = Vector3.new(x, groundY + 0.5, z)
+            local point = Vector3.new(x, groundY + 1.5, z) -- ПОДНЯТА ТОЧКА
+            -- Проверяем, что точка достижима
             local testPath = computePath(point)
             if testPath then
                 return point
             end
         end
     end
-    return currentPos + Vector3.new(math.random(-30, 30), 0, math.random(-30, 30))
+    -- Запасной вариант с поднятием
+    return currentPos + Vector3.new(math.random(-30, 30), 2, math.random(-30, 30))
 end
 
 -- ============================================
@@ -424,7 +452,7 @@ mouse.Button2Down:Connect(function()
 end)
 
 -- ============================================
--- 10. ESP (МИРНЫЙ — СИНИЙ/БЕЛЫЙ)
+-- 10. ESP
 -- ============================================
 local espHighlights = {}
 local espNameplates = {}
@@ -444,7 +472,6 @@ local function updateESP()
             continue
         end
         
-        -- Мирный ESP (белый)
         local hl = Instance.new("Highlight")
         hl.Parent = char
         hl.FillColor = Color3.fromRGB(200, 200, 255)
@@ -477,12 +504,12 @@ players.PlayerRemoving:Connect(updateESP)
 updateESP()
 
 -- ============================================
--- 11. ОСНОВНОЙ ЦИКЛ ИССЛЕДОВАНИЯ
+-- 11. ОСНОВНОЙ ЦИКЛ (ИСПРАВЛЕН)
 -- ============================================
 local function npcBehavior()
     if not rootPart or not humanoid then return end
     
-    -- РЕЖИМ "ДРУГ" — СЛЕДОВАНИЕ ЗА ИГРОКОМ
+    -- РЕЖИМ "ДРУГ"
     if Memory.friendTarget and Memory.friendTarget.Character then
         local targetRoot = Memory.friendTarget.Character:FindFirstChild("HumanoidRootPart")
         if targetRoot then
@@ -495,7 +522,6 @@ local function npcBehavior()
                 stopWASD()
                 Memory.path = nil
                 clearPath()
-                -- Осматриваемся, если стоим
                 if math.random() < 0.05 then
                     lookAround()
                 end
@@ -504,10 +530,9 @@ local function npcBehavior()
         end
     end
     
-    -- РЕЖИМ "ИССЛЕДОВАНИЕ" — ПАТРУЛЬ ПО КАРТЕ
+    -- РЕЖИМ "ИССЛЕДОВАНИЕ"
     Memory.exploreTimer = Memory.exploreTimer + 0.05
     
-    -- Пауза (осмотр местности)
     if Memory.isPaused then
         Memory.pauseTimer = Memory.pauseTimer - 0.05
         if Memory.pauseTimer <= 0 then
@@ -519,7 +544,6 @@ local function npcBehavior()
         else
             stopWASD()
             clearPath()
-            -- Осматриваемся во время паузы
             if math.random() < 0.1 then
                 lookAround()
             end
@@ -527,25 +551,26 @@ local function npcBehavior()
         return
     end
     
-    -- Новая точка исследования
+    -- Новая точка ТОЛЬКО через EXPLORE_CHANGE_TIME (15 сек)
     if not Memory.exploreTarget or Memory.exploreTimer > CONFIG.EXPLORE_CHANGE_TIME then
         Memory.exploreTarget = getExplorePoint()
         Memory.exploreTimer = 0
         Memory.path = nil
         Memory.currentWaypoint = 1
+        Memory.pathAttempts = 0
         if Memory.exploreTarget then
             addLog("🔍 Новая точка исследования")
         end
     end
     
-    -- Случайная пауза (осмотр)
+    -- Случайная пауза
     if math.random() < CONFIG.PAUSE_CHANCE and not Memory.isPaused and Memory.exploreTarget then
         Memory.isPaused = true
         Memory.pauseTimer = CONFIG.PAUSE_TIME * (0.5 + math.random() * 0.5)
         stopWASD()
         clearPath()
         lookAround()
-        addLog("⏸ Осмотр территории на " .. string.format("%.1f", Memory.pauseTimer) .. "с")
+        addLog("⏸ Осмотр на " .. string.format("%.1f", Memory.pauseTimer) .. "с")
         return
     end
     
@@ -553,12 +578,10 @@ local function npcBehavior()
     if Memory.exploreTarget then
         local dist = getDistance(rootPart.Position, Memory.exploreTarget)
         if dist < CONFIG.WAYPOINT_REACH_DIST then
-            -- Достигли цели
             Memory.exploreTarget = nil
             Memory.path = nil
             clearPath()
             stopWASD()
-            -- Осматриваемся по прибытии
             lookAround()
             if math.random() < 0.3 then
                 wait(0.5)
@@ -605,8 +628,8 @@ local function createGUI()
     
     local frame = Instance.new("Frame")
     frame.Parent = screenGui
-    frame.Size = UDim2.new(0, 320, 0, 160)
-    frame.Position = UDim2.new(0.5, -160, 1, -170)
+    frame.Size = UDim2.new(0, 320, 0, 170)
+    frame.Position = UDim2.new(0.5, -160, 1, -180)
     frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     frame.BackgroundTransparency = 0.85
     frame.BorderSizePixel = 2
@@ -627,7 +650,7 @@ local function createGUI()
     title.Size = UDim2.new(1, -35, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "🌾 FARMER AI v1.0 (МИРНЫЙ)"
+    title.Text = "🌾 FARMER AI v1.1 (FIXED)"
     title.TextColor3 = Color3.fromRGB(0, 150, 255)
     title.TextSize = 15
     title.Font = Enum.Font.SourceSansBold
@@ -657,10 +680,20 @@ local function createGUI()
     info3.Size = UDim2.new(1, 0, 0, 20)
     info3.Position = UDim2.new(0, 0, 0, 72)
     info3.BackgroundTransparency = 1
-    info3.Text = "🔵 Синий путь = маршрут исследования"
+    info3.Text = "🔵 Точки пути подняты выше"
     info3.TextColor3 = Color3.fromRGB(100, 200, 255)
     info3.TextSize = 12
     info3.Font = Enum.Font.SourceSans
+    
+    local info4 = Instance.new("TextLabel")
+    info4.Parent = frame
+    info4.Size = UDim2.new(1, 0, 0, 20)
+    info4.Position = UDim2.new(0, 0, 0, 92)
+    info4.BackgroundTransparency = 1
+    info4.Text = "⏳ 15 сек до смены точки"
+    info4.TextColor3 = Color3.fromRGB(200, 255, 200)
+    info4.TextSize = 12
+    info4.Font = Enum.Font.SourceSans
     
     local restartBtn = Instance.new("TextButton")
     restartBtn.Parent = frame
@@ -700,6 +733,7 @@ local function restartScript()
     Memory.isMoving = false
     Memory.friendTarget = nil
     Memory.isFriendMode = false
+    Memory.pathAttempts = 0
     if Memory.friendHighlight then Memory.friendHighlight:Destroy() end
     for _, hl in pairs(espHighlights) do hl:Destroy() end
     for _, np in pairs(espNameplates) do np:Destroy() end
@@ -722,15 +756,14 @@ gui.restartBtn.MouseButton1Click:Connect(restartScript)
 -- ============================================
 -- 15. ЗАПУСК
 -- ============================================
-addLog("🌾 FARMER AI v1.0 ЗАГРУЖЕН!")
+addLog("🌾 FARMER AI v1.1 ЗАГРУЖЕН!")
 addLog("🚶 Мирный режим: исследование карты")
-addLog("🔵 Синий путь до цели")
-addLog("👥 Alt+ПКМ по игроку = следование за ним")
-addLog("⏸ Останавливается для осмотра местности")
+addLog("🔵 Точки пути подняты выше")
+addLog("⏳ 15 сек до смены точки")
+addLog("👥 Alt+ПКМ по игроку = следование")
 
 spawn(mainLoop)
 
--- Обновление при респавне
 player.CharacterAdded:Connect(function()
     wait(0.5)
     updateCharacter()
