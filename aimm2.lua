@@ -1,13 +1,11 @@
 -- ============================================
--- NPC EXPLORER v4.0 (PATHFINDING + ROTATION + ESP)
+-- NPC EXPLORER v4.1 (FIXED STUTTER + SMOOTH ROTATION)
 -- by Цербер для хозяйки
--- Полный контроль движения, обход препятствий через PathfindingService
--- Поворот лица в сторону движения
+-- Исправлено: тряска, поворот, застревание
 -- ============================================
 
 local player = game.Players.LocalPlayer
 local mouse = player:GetMouse()
-local runService = game:GetService("RunService")
 local userInput = game:GetService("UserInputService")
 local virtualInput = game:GetService("VirtualInputManager")
 local players = game:GetService("Players")
@@ -23,16 +21,17 @@ local camera = workspace.CurrentCamera
 -- Настройки
 local CONFIG = {
     MOVE_SPEED = 16,
-    EXPLORE_RADIUS = 100,          -- Радиус исследования
-    MIN_EXPLORE_RADIUS = 20,
-    EXPLORE_CHANGE_TIME = 8,
-    FOLLOW_DISTANCE = 5,
-    PATH_UPDATE_INTERVAL = 0.5,
-    STUCK_THRESHOLD = 3,
+    EXPLORE_RADIUS = 80,
+    MIN_EXPLORE_RADIUS = 15,
+    EXPLORE_CHANGE_TIME = 10,
+    FOLLOW_DISTANCE = 4,
+    PATH_UPDATE_INTERVAL = 1.0,    -- Реже обновляем путь
+    STUCK_THRESHOLD = 2.5,
     JUMP_FORCE = 50,
-    TURN_SPEED = 0.25,             -- Скорость поворота лица
-    PAUSE_CHANCE = 0.1,
-    PAUSE_TIME = 2.5,
+    ROTATION_SPEED = 0.3,          -- Плавный поворот
+    PAUSE_CHANCE = 0.08,
+    PAUSE_TIME = 2.0,
+    WAYPOINT_REACH_DIST = 1.0,     -- Дистанция до точки, чтобы считать её достигнутой
 }
 
 -- Память
@@ -40,25 +39,23 @@ local Memory = {
     running = true,
     exploreTarget = nil,
     exploreTimer = 0,
-    isMoving = false,
     lastPosition = nil,
     stuckTimer = 0,
     isPaused = false,
     pauseTimer = 0,
     targetPlayer = nil,
     targetHighlight = nil,
-    path = nil,                    -- Текущий путь от PathfindingService
-    pathPoints = {},
+    path = nil,
     currentWaypoint = 1,
     pathParts = {},
-    followTarget = nil,
     lastPathUpdate = 0,
     isJumping = false,
+    isMoving = false,
 }
 
--- Функции логирования
+-- Логирование
 local function addLog(text)
-    print("[NPC-EXPLORER] " .. text)
+    print("[NPC] " .. text)
 end
 
 -- ============================================
@@ -84,17 +81,6 @@ player.CharacterAdded:Connect(updateCharacter)
 -- ============================================
 -- 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 -- ============================================
-local function getHeightAt(position)
-    local rayParams = RaycastParams.new()
-    rayParams.FilterDescendantsInstances = {character}
-    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
-    local rayResult = workspace:Raycast(position + Vector3.new(0, 10, 0), Vector3.new(0, -25, 0), rayParams)
-    if rayResult then
-        return rayResult.Position.Y
-    end
-    return position.Y
-end
-
 local function getDistance(pos1, pos2)
     return (pos1 - pos2).Magnitude
 end
@@ -108,26 +94,50 @@ local function isOnGround()
     return rayResult ~= nil
 end
 
+local function getHeightAt(position)
+    local rayParams = RaycastParams.new()
+    rayParams.FilterDescendantsInstances = {character}
+    rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+    local rayResult = workspace:Raycast(position + Vector3.new(0, 10, 0), Vector3.new(0, -25, 0), rayParams)
+    if rayResult then
+        return rayResult.Position.Y
+    end
+    return position.Y
+end
+
 -- ============================================
--- 3. ПОВОРОТ ЛИЦА В СТОРОНУ ДВИЖЕНИЯ
+-- 3. ПОВОРОТ ЛИЦА (ТОЛЬКО ЧЕРЕЗ CFrame, БЕЗ КОНФЛИКТОВ)
 -- ============================================
-local function rotateCharacter(direction)
+local function smoothRotate(direction)
     if not direction or direction.Magnitude < 0.1 then return end
-    local lookAt = CFrame.lookAt(rootPart.Position, rootPart.Position + direction)
-    local targetCFrame = CFrame.new(rootPart.Position, rootPart.Position + direction)
     
-    -- Плавный поворот HumanoidRootPart
-    rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, CONFIG.TURN_SPEED)
+    -- Нормализуем направление в плоскости XZ
+    local flatDir = Vector3.new(direction.X, 0, direction.Z).Unit
+    if flatDir.Magnitude < 0.1 then return end
     
-    -- Поворот головы (шея)
+    -- Вычисляем целевой угол
+    local targetAngle = math.atan2(flatDir.X, flatDir.Z)
+    local currentAngle = math.atan2(rootPart.CFrame.LookVector.X, rootPart.CFrame.LookVector.Z)
+    
+    -- Плавное вращение
+    local angleDiff = targetAngle - currentAngle
+    while angleDiff > math.pi do angleDiff = angleDiff - 2 * math.pi end
+    while angleDiff < -math.pi do angleDiff = angleDiff + 2 * math.pi end
+    
+    local newAngle = currentAngle + angleDiff * CONFIG.ROTATION_SPEED
+    local newCFrame = CFrame.new(rootPart.Position) * CFrame.Angles(0, newAngle, 0)
+    rootPart.CFrame = newCFrame
+    
+    -- Поворот головы (слегка)
     if head then
-        local headLook = CFrame.lookAt(head.Position, head.Position + direction * 10)
-        head.CFrame = head.CFrame:Lerp(headLook, CONFIG.TURN_SPEED * 0.5)
+        local headAngle = math.atan2(flatDir.X, flatDir.Z)
+        local headCFrame = CFrame.new(head.Position) * CFrame.Angles(0, headAngle, 0)
+        head.CFrame = head.CFrame:Lerp(headCFrame, 0.2)
     end
 end
 
 -- ============================================
--- 4. PATHFINDING SERVICE (НОРМАЛЬНЫЙ ОБХОД)
+-- 4. PATHFINDING SERVICE
 -- ============================================
 local function computePath(targetPosition)
     if not rootPart or not targetPosition then return nil end
@@ -138,45 +148,27 @@ local function computePath(targetPosition)
         AgentCanJump = true,
         AgentCanClimb = true,
         WaypointSpacing = 2,
-        Cost = {
-            Water = 10,
-            Dangerous = 100,
-        }
     }
     
     local path = pathfindingService:CreatePath(pathParams)
-    local success, errorMessage = pcall(function()
+    local success = pcall(function()
         path:ComputeAsync(rootPart.Position, targetPosition)
     end)
     
-    if not success then
-        addLog("❌ Ошибка Pathfinding: " .. errorMessage)
+    if not success or path.Status ~= Enum.PathStatus.Success then
         return nil
     end
     
-    if path.Status == Enum.PathStatus.Success then
-        return path
-    else
-        addLog("⚠️ Путь не найден, статус: " .. tostring(path.Status))
-        return nil
-    end
+    return path
 end
 
 local function getWaypoints(path)
     local waypoints = {}
-    local waypointsEnum = path:GetWaypoints()
-    for i, waypoint in ipairs(waypointsEnum) do
-        if waypoint.Action == Enum.PathWaypointAction.Jump then
-            table.insert(waypoints, {
-                position = waypoint.Position,
-                action = "Jump"
-            })
-        else
-            table.insert(waypoints, {
-                position = waypoint.Position,
-                action = "Walk"
-            })
-        end
+    for _, waypoint in ipairs(path:GetWaypoints()) do
+        table.insert(waypoints, {
+            position = waypoint.Position,
+            action = waypoint.Action
+        })
     end
     return waypoints
 end
@@ -197,27 +189,40 @@ local function drawPath(waypoints)
     
     for i, waypoint in ipairs(waypoints) do
         local part = Instance.new("Part")
-        part.Size = Vector3.new(0.5, 0.1, 0.5)
+        part.Size = Vector3.new(0.4, 0.1, 0.4)
         part.Position = waypoint.position + Vector3.new(0, 0.2, 0)
         part.Anchored = true
         part.CanCollide = false
         part.Material = Enum.Material.Neon
         part.BrickColor = BrickColor.new("Bright yellow")
-        part.Transparency = 0.4
+        part.Transparency = 0.5
         part.Parent = workspace
         table.insert(Memory.pathParts, part)
     end
 end
 
 -- ============================================
--- 6. УПРАВЛЕНИЕ ДВИЖЕНИЕМ (WASD)
+-- 6. УПРАВЛЕНИЕ WASD (БЕЗ РЫВКОВ)
 -- ============================================
+local keysPressed = {
+    W = false,
+    S = false,
+    A = false,
+    D = false,
+}
+
 local function pressKey(key)
-    virtualInput:SendKeyEvent(true, key, false, nil)
+    if not keysPressed[key.Name] then
+        keysPressed[key.Name] = true
+        virtualInput:SendKeyEvent(true, key, false, nil)
+    end
 end
 
 local function releaseKey(key)
-    virtualInput:SendKeyEvent(false, key, false, nil)
+    if keysPressed[key.Name] then
+        keysPressed[key.Name] = false
+        virtualInput:SendKeyEvent(false, key, false, nil)
+    end
 end
 
 local function stopWASD()
@@ -225,33 +230,30 @@ local function stopWASD()
     releaseKey(Enum.KeyCode.S)
     releaseKey(Enum.KeyCode.A)
     releaseKey(Enum.KeyCode.D)
+    Memory.isMoving = false
 end
 
-local function moveToWaypoint(waypoint)
-    if not waypoint or not rootPart then return end
-    
-    local direction = (waypoint.position - rootPart.Position).Unit
-    local distance = getDistance(rootPart.Position, waypoint.position)
-    
-    if distance < 0.5 then
-        return true -- Достигли точки
+local function updateWASD(direction)
+    if not direction or direction.Magnitude < 0.1 then
+        stopWASD()
+        return
     end
     
-    -- Поворачиваем лицо в сторону движения
-    rotateCharacter(direction)
+    -- Нормализуем направление
+    local dir = direction.Unit
     
     -- Определяем направление относительно камеры
     local forward = camera.CFrame.LookVector * Vector3.new(1,0,1)
     local right = camera.CFrame.RightVector * Vector3.new(1,0,1)
     
-    local forwardDot = direction:Dot(forward)
-    local rightDot = direction:Dot(right)
+    local forwardDot = dir:Dot(forward)
+    local rightDot = dir:Dot(right)
     
     -- W/S
-    if forwardDot > 0.3 then
+    if forwardDot > 0.2 then
         pressKey(Enum.KeyCode.W)
         releaseKey(Enum.KeyCode.S)
-    elseif forwardDot < -0.3 then
+    elseif forwardDot < -0.2 then
         pressKey(Enum.KeyCode.S)
         releaseKey(Enum.KeyCode.W)
     else
@@ -260,10 +262,10 @@ local function moveToWaypoint(waypoint)
     end
     
     -- A/D
-    if rightDot > 0.3 then
+    if rightDot > 0.2 then
         pressKey(Enum.KeyCode.D)
         releaseKey(Enum.KeyCode.A)
-    elseif rightDot < -0.3 then
+    elseif rightDot < -0.2 then
         pressKey(Enum.KeyCode.A)
         releaseKey(Enum.KeyCode.D)
     else
@@ -271,7 +273,7 @@ local function moveToWaypoint(waypoint)
         releaseKey(Enum.KeyCode.D)
     end
     
-    return false
+    Memory.isMoving = true
 end
 
 -- ============================================
@@ -299,15 +301,21 @@ mouse.Button2Down:Connect(function()
         if targetPart then
             local plr = game.Players:GetPlayerFromCharacter(targetPart.Parent)
             if plr and plr ~= player then
+                -- Сбрасываем старую цель
+                if Memory.targetHighlight then 
+                    Memory.targetHighlight:Destroy() 
+                end
                 Memory.targetPlayer = plr
                 addLog("🎯 Цель выбрана: " .. plr.Name)
-                if Memory.targetHighlight then Memory.targetHighlight:Destroy() end
+                
+                -- Зелёная подсветка
                 local highlight = Instance.new("Highlight")
                 highlight.Parent = plr.Character
                 highlight.FillColor = Color3.fromRGB(0, 255, 0)
                 highlight.FillTransparency = 0.3
                 highlight.OutlineColor = Color3.fromRGB(0, 200, 0)
                 Memory.targetHighlight = highlight
+                
                 clearPath()
                 Memory.path = nil
                 Memory.currentWaypoint = 1
@@ -325,6 +333,8 @@ game.Players.PlayerRemoving:Connect(function(plr)
             Memory.targetHighlight = nil
         end
         addLog("❌ Цель покинула игру")
+        -- Обновляем ESP, чтобы цель стала белой
+        updateESP()
     end
 end)
 
@@ -345,7 +355,13 @@ local function updateESP()
         if plr == player then continue end
         if not plr.Character then continue end
         local char = plr.Character
-        -- Подсветка
+        
+        -- Если это цель - она уже зелёная, пропускаем
+        if plr == Memory.targetPlayer then
+            continue
+        end
+        
+        -- Подсветка белая
         local hl = Instance.new("Highlight")
         hl.Parent = char
         hl.FillColor = Color3.fromRGB(255, 255, 255)
@@ -353,6 +369,7 @@ local function updateESP()
         hl.OutlineColor = Color3.fromRGB(255, 255, 255)
         hl.OutlineTransparency = 0.3
         table.insert(espHighlights, hl)
+        
         -- Имя
         local billboard = Instance.new("BillboardGui")
         billboard.Parent = char:FindFirstChild("Head") or char
@@ -411,14 +428,29 @@ end
 local function moveToTarget(targetPosition)
     if not rootPart or not targetPosition then return end
     
-    -- Обновляем путь, если прошло достаточно времени или путь отсутствует
+    -- Проверяем, нужно ли обновить путь
     local timeNow = tick()
-    if not Memory.path or Memory.currentWaypoint > #Memory.path or (timeNow - Memory.lastPathUpdate) > CONFIG.PATH_UPDATE_INTERVAL then
+    local shouldUpdatePath = false
+    
+    if not Memory.path then
+        shouldUpdatePath = true
+    elseif Memory.currentWaypoint > #Memory.path then
+        shouldUpdatePath = true
+    elseif (timeNow - Memory.lastPathUpdate) > CONFIG.PATH_UPDATE_INTERVAL then
+        -- Обновляем путь, только если цель сильно сместилась
+        local lastTarget = Memory.lastTargetPosition or targetPosition
+        if getDistance(lastTarget, targetPosition) > 3 then
+            shouldUpdatePath = true
+        end
+    end
+    
+    if shouldUpdatePath then
         local newPath = computePath(targetPosition)
         if newPath then
             Memory.path = getWaypoints(newPath)
             Memory.currentWaypoint = 1
             Memory.lastPathUpdate = timeNow
+            Memory.lastTargetPosition = targetPosition
             drawPath(Memory.path)
             addLog("🔄 Путь обновлён, точек: " .. #Memory.path)
         else
@@ -437,41 +469,56 @@ local function moveToTarget(targetPosition)
     -- Двигаемся по точкам пути
     if Memory.path and Memory.currentWaypoint <= #Memory.path then
         local currentWaypoint = Memory.path[Memory.currentWaypoint]
-        local reached = moveToWaypoint(currentWaypoint)
+        local waypointPos = currentWaypoint.position
+        local distance = getDistance(rootPart.Position, waypointPos)
         
-        -- Проверка на застревание
-        if Memory.lastPosition then
-            local moveDist = getDistance(rootPart.Position, Memory.lastPosition)
-            if moveDist < 0.1 then
-                Memory.stuckTimer = Memory.stuckTimer + 0.05
-                if Memory.stuckTimer > CONFIG.STUCK_THRESHOLD then
-                    addLog("🔄 Застрял! Пересчитываю путь")
-                    Memory.path = nil
-                    Memory.currentWaypoint = 1
-                    Memory.stuckTimer = 0
-                    -- Прыжок
-                    if isOnGround() and not Memory.isJumping then
-                        Memory.isJumping = true
-                        pressKey(Enum.KeyCode.Space)
-                        wait(0.15)
-                        releaseKey(Enum.KeyCode.Space)
-                        Memory.isJumping = false
-                    end
-                end
-            else
-                Memory.stuckTimer = 0
-            end
-        end
-        Memory.lastPosition = rootPart.Position
-        
-        -- Если достигли точки, переходим к следующей
-        if reached then
+        -- Проверка на достижение точки
+        if distance < CONFIG.WAYPOINT_REACH_DIST then
             Memory.currentWaypoint = Memory.currentWaypoint + 1
             if Memory.currentWaypoint > #Memory.path then
                 -- Путь закончен
                 Memory.path = nil
                 Memory.currentWaypoint = 1
+                stopWASD()
+                clearPath()
+                return
             end
+            currentWaypoint = Memory.path[Memory.currentWaypoint]
+            waypointPos = currentWaypoint.position
+        end
+        
+        -- Двигаемся к текущей точке
+        local direction = (waypointPos - rootPart.Position).Unit
+        if direction.Magnitude > 0.1 then
+            smoothRotate(direction)
+            updateWASD(direction)
+        end
+        
+        -- Проверка на застревание (только если движемся)
+        if Memory.isMoving then
+            if Memory.lastPosition then
+                local moveDist = getDistance(rootPart.Position, Memory.lastPosition)
+                if moveDist < 0.2 then
+                    Memory.stuckTimer = Memory.stuckTimer + 0.05
+                    if Memory.stuckTimer > CONFIG.STUCK_THRESHOLD then
+                        addLog("🔄 Застрял! Пересчитываю путь")
+                        Memory.path = nil
+                        Memory.currentWaypoint = 1
+                        Memory.stuckTimer = 0
+                        -- Прыжок
+                        if isOnGround() and not Memory.isJumping then
+                            Memory.isJumping = true
+                            pressKey(Enum.KeyCode.Space)
+                            wait(0.15)
+                            releaseKey(Enum.KeyCode.Space)
+                            Memory.isJumping = false
+                        end
+                    end
+                else
+                    Memory.stuckTimer = 0
+                end
+            end
+            Memory.lastPosition = rootPart.Position
         end
     end
 end
@@ -540,7 +587,7 @@ local function npcBehavior()
     
     if Memory.exploreTarget then
         local dist = getDistance(rootPart.Position, Memory.exploreTarget)
-        if dist < 2 then
+        if dist < CONFIG.WAYPOINT_REACH_DIST then
             -- Достигли цели
             Memory.exploreTarget = nil
             Memory.path = nil
@@ -613,7 +660,7 @@ local function createGUI()
     title.Size = UDim2.new(1, -35, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "🐕 NPC EXPLORER v4.0"
+    title.Text = "🐕 NPC EXPLORER v4.1"
     title.TextColor3 = Color3.fromRGB(255, 165, 0)
     title.TextSize = 15
     title.Font = Enum.Font.SourceSansBold
@@ -677,7 +724,6 @@ local function restartScript()
     clearPath()
     Memory.exploreTarget = nil
     Memory.exploreTimer = 0
-    Memory.isMoving = false
     Memory.stuckTimer = 0
     Memory.isPaused = false
     Memory.pauseTimer = 0
@@ -685,6 +731,7 @@ local function restartScript()
     Memory.targetPlayer = nil
     Memory.path = nil
     Memory.currentWaypoint = 1
+    Memory.isMoving = false
     if Memory.targetHighlight then Memory.targetHighlight:Destroy() end
     for _, hl in pairs(espHighlights) do hl:Destroy() end
     for _, np in pairs(espNameplates) do np:Destroy() end
@@ -707,7 +754,7 @@ gui.restartBtn.MouseButton1Click:Connect(restartScript)
 -- ============================================
 -- 15. ЗАПУСК
 -- ============================================
-addLog("🐕 NPC EXPLORER v4.0 ЗАГРУЖЕН!")
+addLog("🐕 NPC EXPLORER v4.1 ЗАГРУЖЕН!")
 addLog("🚶 Используется PathfindingService для обхода препятствий")
 addLog("🟡 Жёлтый путь до цели")
 addLog("👁️ ESP: подсветка игроков + имена")
