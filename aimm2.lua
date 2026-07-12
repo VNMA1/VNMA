@@ -1,7 +1,7 @@
 -- ============================================
--- FARMER AI v1.1 (FIXED PATH + STABILITY)
+-- FARMER AI v1.2 (MORE POINTS + SMOOTH BODY ROTATION)
 -- by Цербер для хозяйки
--- Исправлено: высота точек на уровне туловища (+3 студии)
+-- Исправлено: больше точек для плавного пути, убран поворот головы
 -- ============================================
 
 local player = game.Players.LocalPlayer
@@ -22,6 +22,7 @@ local camera = workspace.CurrentCamera
 -- НАСТРОЙКИ
 -- ============================================
 local CONFIG = {
+    -- Движение
     MOVE_SPEED = 16,
     EXPLORE_RADIUS = 100,
     MIN_EXPLORE_RADIUS = 25,
@@ -32,6 +33,8 @@ local CONFIG = {
     JUMP_FORCE = 50,
     WAYPOINT_REACH_DIST = 2.0,
     MAX_PATH_ATTEMPTS = 3,
+    
+    -- Поведение
     PAUSE_CHANCE = 0.12,
     PAUSE_TIME = 3.0,
 }
@@ -55,11 +58,13 @@ local Memory = {
     lastPathUpdate = 0,
     lastTargetPosition = nil,
     pathAttempts = 0,
+    
     friendTarget = nil,
     friendHighlight = nil,
     isFriendMode = false,
 }
 
+-- Логирование
 local function addLog(text)
     print("[FARMER-AI] " .. text)
 end
@@ -112,7 +117,7 @@ local function getHeightAt(position)
 end
 
 -- ============================================
--- 3. PATHFINDING SERVICE (ВЫСОТА ТОЧЕК +3)
+-- 3. PATHFINDING SERVICE (БОЛЬШЕ ТОЧЕК)
 -- ============================================
 local function computePath(targetPosition)
     if not rootPart or not targetPosition then return nil end
@@ -122,7 +127,7 @@ local function computePath(targetPosition)
         AgentHeight = 5,
         AgentCanJump = true,
         AgentCanClimb = true,
-        WaypointSpacing = 5,
+        WaypointSpacing = 3,        -- ИЗМЕНЕНО: 3 (было 5) → БОЛЬШЕ ТОЧЕК
     }
     
     local path = pathfindingService:CreatePath(pathParams)
@@ -148,7 +153,7 @@ local function getWaypoints(path)
         end
         lastPos = waypoint.Position
         table.insert(waypoints, {
-            position = waypoint.Position + Vector3.new(0, 3.0, 0), -- ПОДНЯТО НА +3 (УРОВЕНЬ ТУЛОВИЩА)
+            position = waypoint.Position + Vector3.new(0, 1.0, 0),
             action = waypoint.Action
         })
     end
@@ -172,7 +177,7 @@ local function drawPath(waypoints)
     for i, waypoint in ipairs(waypoints) do
         local part = Instance.new("Part")
         part.Size = Vector3.new(0.6, 0.2, 0.6)
-        part.Position = waypoint.position -- УЖЕ ПОДНЯТЫ В getWaypoints
+        part.Position = waypoint.position + Vector3.new(0, 0.5, 0)
         part.Anchored = true
         part.CanCollide = false
         part.Material = Enum.Material.Neon
@@ -184,7 +189,7 @@ local function drawPath(waypoints)
 end
 
 -- ============================================
--- 5. УПРАВЛЕНИЕ WASD
+-- 5. УПРАВЛЕНИЕ WASD (ПЛАВНЫЙ ПОВОРОТ ТЕЛА, БЕЗ ГОЛОВЫ)
 -- ============================================
 local function pressKey(key)
     virtualInput:SendKeyEvent(true, key, false, nil)
@@ -212,14 +217,13 @@ local function moveToWaypoint(waypoint)
         return true
     end
     
+    -- ПЛАВНЫЙ ПОВОРОТ ТЕЛА (голова НЕ трогается)
     local targetCFrame = CFrame.new(rootPart.Position, rootPart.Position + direction)
-    rootPart.CFrame = targetCFrame
+    rootPart.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.15)  -- плавность 0.15
     
-    if head then
-        local headLook = CFrame.lookAt(head.Position, head.Position + direction * 10)
-        head.CFrame = headLook
-    end
+    -- УБРАН ПОВОРОТ ГОЛОВЫ
     
+    -- WASD относительно камеры
     local forward = camera.CFrame.LookVector * Vector3.new(1,0,1)
     local right = camera.CFrame.RightVector * Vector3.new(1,0,1)
     
@@ -343,7 +347,7 @@ local function moveToPosition(targetPos)
 end
 
 -- ============================================
--- 7. ГЕНЕРАЦИЯ ТОЧЕК (ВЫСОТА +3)
+-- 7. ГЕНЕРАЦИЯ ТОЧЕК
 -- ============================================
 local function getExplorePoint()
     if not rootPart then return nil end
@@ -357,14 +361,14 @@ local function getExplorePoint()
         local z = currentPos.Z + math.sin(angle) * radius
         local groundY = getHeightAt(Vector3.new(x, currentPos.Y + 15, z))
         if groundY then
-            local point = Vector3.new(x, groundY + 3.0, z) -- ПОДНЯТО НА +3 (УРОВЕНЬ ТУЛОВИЩА)
+            local point = Vector3.new(x, groundY + 1.5, z)
             local testPath = computePath(point)
             if testPath then
                 return point
             end
         end
     end
-    return currentPos + Vector3.new(math.random(-30, 30), 3, math.random(-30, 30)) -- ПОДНЯТО
+    return currentPos + Vector3.new(math.random(-30, 30), 2, math.random(-30, 30))
 end
 
 -- ============================================
@@ -626,7 +630,7 @@ local function createGUI()
     title.Size = UDim2.new(1, -35, 0, 30)
     title.Position = UDim2.new(0, 0, 0, 0)
     title.BackgroundTransparency = 1
-    title.Text = "🌾 FARMER AI v1.1 (FIXED)"
+    title.Text = "🌾 FARMER AI v1.2"
     title.TextColor3 = Color3.fromRGB(0, 150, 255)
     title.TextSize = 15
     title.Font = Enum.Font.SourceSansBold
@@ -636,7 +640,7 @@ local function createGUI()
     info1.Size = UDim2.new(1, 0, 0, 20)
     info1.Position = UDim2.new(0, 0, 0, 32)
     info1.BackgroundTransparency = 1
-    info1.Text = "🚶 Исследует карту (без атаки)"
+    info1.Text = "🚶 Больше точек для плавного пути"
     info1.TextColor3 = Color3.fromRGB(200, 200, 200)
     info1.TextSize = 12
     info1.Font = Enum.Font.SourceSans
@@ -656,7 +660,7 @@ local function createGUI()
     info3.Size = UDim2.new(1, 0, 0, 20)
     info3.Position = UDim2.new(0, 0, 0, 72)
     info3.BackgroundTransparency = 1
-    info3.Text = "🔵 Точки на уровне туловища (+3)"
+    info3.Text = "🔵 Точки пути подняты выше"
     info3.TextColor3 = Color3.fromRGB(100, 200, 255)
     info3.TextSize = 12
     info3.Font = Enum.Font.SourceSans
@@ -666,7 +670,7 @@ local function createGUI()
     info4.Size = UDim2.new(1, 0, 0, 20)
     info4.Position = UDim2.new(0, 0, 0, 92)
     info4.BackgroundTransparency = 1
-    info4.Text = "⏳ 15 сек до смены точки"
+    info4.Text = "🔄 Плавный поворот тела (без головы)"
     info4.TextColor3 = Color3.fromRGB(200, 255, 200)
     info4.TextSize = 12
     info4.Font = Enum.Font.SourceSans
@@ -732,10 +736,10 @@ gui.restartBtn.MouseButton1Click:Connect(restartScript)
 -- ============================================
 -- 15. ЗАПУСК
 -- ============================================
-addLog("🌾 FARMER AI v1.1 ЗАГРУЖЕН!")
-addLog("🚶 Мирный режим: исследование карты")
-addLog("🔵 Точки на уровне туловища (+3)")
-addLog("⏳ 15 сек до смены точки")
+addLog("🌾 FARMER AI v1.2 ЗАГРУЖЕН!")
+addLog("🚶 Больше точек для плавного пути")
+addLog("🔵 Точки на уровне +1 студия")
+addLog("🔄 Плавный поворот тела (без головы)")
 addLog("👥 Alt+ПКМ по игроку = следование")
 
 spawn(mainLoop)
