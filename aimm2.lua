@@ -1,7 +1,7 @@
 -- ============================================
 -- FARMER AI v1.1 (FIXED PATH + STABILITY)
 -- by Цербер для хозяйки
--- Исправлено: путь, застревание, смена точек
+-- Исправлено: высота точек на уровне туловища (+3 студии)
 -- ============================================
 
 local player = game.Players.LocalPlayer
@@ -19,22 +19,19 @@ local head = character:WaitForChild("Head")
 local camera = workspace.CurrentCamera
 
 -- ============================================
--- НАСТРОЙКИ (ИСПРАВЛЕНЫ)
+-- НАСТРОЙКИ
 -- ============================================
 local CONFIG = {
-    -- Движение
     MOVE_SPEED = 16,
     EXPLORE_RADIUS = 100,
     MIN_EXPLORE_RADIUS = 25,
-    EXPLORE_CHANGE_TIME = 15,      -- НОВОЕ: 15 секунд до смены точки
+    EXPLORE_CHANGE_TIME = 15,
     FOLLOW_DISTANCE = 5,
-    PATH_UPDATE_INTERVAL = 2.0,    -- ИСПРАВЛЕНО: 2 секунды (было 1.0)
-    STUCK_THRESHOLD = 6,           -- ИСПРАВЛЕНО: 6 секунд застревания (было 4)
+    PATH_UPDATE_INTERVAL = 2.0,
+    STUCK_THRESHOLD = 6,
     JUMP_FORCE = 50,
-    WAYPOINT_REACH_DIST = 2.0,     -- ИСПРАВЛЕНО: 2 студия (было 1.2)
-    MAX_PATH_ATTEMPTS = 3,         -- НОВОЕ: попыток построить путь
-    
-    -- Поведение
+    WAYPOINT_REACH_DIST = 2.0,
+    MAX_PATH_ATTEMPTS = 3,
     PAUSE_CHANCE = 0.12,
     PAUSE_TIME = 3.0,
 }
@@ -57,15 +54,12 @@ local Memory = {
     pathParts = {},
     lastPathUpdate = 0,
     lastTargetPosition = nil,
-    pathAttempts = 0,              -- НОВОЕ: счётчик попыток
-    
-    -- Режим "друг"
+    pathAttempts = 0,
     friendTarget = nil,
     friendHighlight = nil,
     isFriendMode = false,
 }
 
--- Логирование
 local function addLog(text)
     print("[FARMER-AI] " .. text)
 end
@@ -118,17 +112,17 @@ local function getHeightAt(position)
 end
 
 -- ============================================
--- 3. PATHFINDING SERVICE (ИСПРАВЛЕН)
+-- 3. PATHFINDING SERVICE (ВЫСОТА ТОЧЕК +3)
 -- ============================================
 local function computePath(targetPosition)
     if not rootPart or not targetPosition then return nil end
     
     local pathParams = {
-        AgentRadius = 2.0,          -- ИСПРАВЛЕНО: больше радиус (было 1.5)
+        AgentRadius = 2.0,
         AgentHeight = 5,
         AgentCanJump = true,
         AgentCanClimb = true,
-        WaypointSpacing = 5,        -- ИСПРАВЛЕНО: реже точки (было 2)
+        WaypointSpacing = 5,
     }
     
     local path = pathfindingService:CreatePath(pathParams)
@@ -147,7 +141,6 @@ local function getWaypoints(path)
     local waypoints = {}
     local lastPos = nil
     for _, waypoint in ipairs(path:GetWaypoints()) do
-        -- Пропускаем слишком близкие точки (чтобы не было "ползком")
         if lastPos then
             if getDistance(lastPos, waypoint.Position) < 3 then
                 continue
@@ -155,7 +148,7 @@ local function getWaypoints(path)
         end
         lastPos = waypoint.Position
         table.insert(waypoints, {
-            position = waypoint.Position + Vector3.new(0, 1.0, 0), -- ПОДНЯТЫ ТОЧКИ!
+            position = waypoint.Position + Vector3.new(0, 3.0, 0), -- ПОДНЯТО НА +3 (УРОВЕНЬ ТУЛОВИЩА)
             action = waypoint.Action
         })
     end
@@ -163,7 +156,7 @@ local function getWaypoints(path)
 end
 
 -- ============================================
--- 4. ОТОБРАЖЕНИЕ ПУТИ (ПОДНЯТЫ ТОЧКИ)
+-- 4. ОТОБРАЖЕНИЕ ПУТИ
 -- ============================================
 local function clearPath()
     for _, part in pairs(Memory.pathParts) do
@@ -178,8 +171,8 @@ local function drawPath(waypoints)
     
     for i, waypoint in ipairs(waypoints) do
         local part = Instance.new("Part")
-        part.Size = Vector3.new(0.6, 0.2, 0.6)     -- БОЛЬШЕ РАЗМЕР
-        part.Position = waypoint.position + Vector3.new(0, 0.5, 0) -- ВЫШЕ
+        part.Size = Vector3.new(0.6, 0.2, 0.6)
+        part.Position = waypoint.position -- УЖЕ ПОДНЯТЫ В getWaypoints
         part.Anchored = true
         part.CanCollide = false
         part.Material = Enum.Material.Neon
@@ -219,7 +212,6 @@ local function moveToWaypoint(waypoint)
         return true
     end
     
-    -- Поворот
     local targetCFrame = CFrame.new(rootPart.Position, rootPart.Position + direction)
     rootPart.CFrame = targetCFrame
     
@@ -228,7 +220,6 @@ local function moveToWaypoint(waypoint)
         head.CFrame = headLook
     end
     
-    -- WASD относительно камеры
     local forward = camera.CFrame.LookVector * Vector3.new(1,0,1)
     local right = camera.CFrame.RightVector * Vector3.new(1,0,1)
     
@@ -262,7 +253,7 @@ local function moveToWaypoint(waypoint)
 end
 
 -- ============================================
--- 6. ПЕРЕМЕЩЕНИЕ К ТОЧКЕ (ИСПРАВЛЕНО)
+-- 6. ПЕРЕМЕЩЕНИЕ К ТОЧКЕ
 -- ============================================
 local function moveToPosition(targetPos)
     if not rootPart or not targetPos then return end
@@ -270,10 +261,6 @@ local function moveToPosition(targetPos)
     local timeNow = tick()
     local shouldUpdatePath = false
     
-    -- Обновляем путь ТОЛЬКО если:
-    -- 1. Нет пути
-    -- 2. Закончились точки
-    -- 3. Прошло 2 секунды И цель сдвинулась >5 студий
     if not Memory.path then
         shouldUpdatePath = true
     elseif Memory.currentWaypoint > #Memory.path then
@@ -300,13 +287,11 @@ local function moveToPosition(targetPos)
         else
             Memory.pathAttempts = Memory.pathAttempts + 1
             if Memory.pathAttempts > CONFIG.MAX_PATH_ATTEMPTS then
-                -- Если не можем построить путь, выбираем новую точку
                 Memory.exploreTarget = getExplorePoint()
                 Memory.pathAttempts = 0
                 addLog("⚠️ Не могу построить путь, меняю точку")
                 return
             end
-            -- Прыжок, чтобы "перезагрузить" положение
             if isOnGround() and not Memory.isJumping then
                 Memory.isJumping = true
                 pressKey(Enum.KeyCode.Space)
@@ -318,16 +303,14 @@ local function moveToPosition(targetPos)
         end
     end
     
-    -- Двигаемся по точкам пути
     if Memory.path and Memory.currentWaypoint <= #Memory.path then
         local currentWaypoint = Memory.path[Memory.currentWaypoint]
         local reached = moveToWaypoint(currentWaypoint)
         
-        -- Проверка на застревание (увеличен порог)
         if Memory.isMoving then
             if Memory.lastPosition then
                 local moveDist = getDistance(rootPart.Position, Memory.lastPosition)
-                if moveDist < 0.3 then          -- ИСПРАВЛЕНО: 0.3 (было 0.2)
+                if moveDist < 0.3 then
                     Memory.stuckTimer = Memory.stuckTimer + 0.05
                     if Memory.stuckTimer > CONFIG.STUCK_THRESHOLD then
                         addLog("🔄 Застрял! Пересчёт пути")
@@ -360,7 +343,7 @@ local function moveToPosition(targetPos)
 end
 
 -- ============================================
--- 7. ГЕНЕРАЦИЯ ТОЧЕК (ИСПРАВЛЕНА)
+-- 7. ГЕНЕРАЦИЯ ТОЧЕК (ВЫСОТА +3)
 -- ============================================
 local function getExplorePoint()
     if not rootPart then return nil end
@@ -374,16 +357,14 @@ local function getExplorePoint()
         local z = currentPos.Z + math.sin(angle) * radius
         local groundY = getHeightAt(Vector3.new(x, currentPos.Y + 15, z))
         if groundY then
-            local point = Vector3.new(x, groundY + 1.5, z) -- ПОДНЯТА ТОЧКА
-            -- Проверяем, что точка достижима
+            local point = Vector3.new(x, groundY + 3.0, z) -- ПОДНЯТО НА +3 (УРОВЕНЬ ТУЛОВИЩА)
             local testPath = computePath(point)
             if testPath then
                 return point
             end
         end
     end
-    -- Запасной вариант с поднятием
-    return currentPos + Vector3.new(math.random(-30, 30), 2, math.random(-30, 30))
+    return currentPos + Vector3.new(math.random(-30, 30), 3, math.random(-30, 30)) -- ПОДНЯТО
 end
 
 -- ============================================
@@ -504,12 +485,11 @@ players.PlayerRemoving:Connect(updateESP)
 updateESP()
 
 -- ============================================
--- 11. ОСНОВНОЙ ЦИКЛ (ИСПРАВЛЕН)
+-- 11. ОСНОВНОЙ ЦИКЛ
 -- ============================================
 local function npcBehavior()
     if not rootPart or not humanoid then return end
     
-    -- РЕЖИМ "ДРУГ"
     if Memory.friendTarget and Memory.friendTarget.Character then
         local targetRoot = Memory.friendTarget.Character:FindFirstChild("HumanoidRootPart")
         if targetRoot then
@@ -530,7 +510,6 @@ local function npcBehavior()
         end
     end
     
-    -- РЕЖИМ "ИССЛЕДОВАНИЕ"
     Memory.exploreTimer = Memory.exploreTimer + 0.05
     
     if Memory.isPaused then
@@ -551,7 +530,6 @@ local function npcBehavior()
         return
     end
     
-    -- Новая точка ТОЛЬКО через EXPLORE_CHANGE_TIME (15 сек)
     if not Memory.exploreTarget or Memory.exploreTimer > CONFIG.EXPLORE_CHANGE_TIME then
         Memory.exploreTarget = getExplorePoint()
         Memory.exploreTimer = 0
@@ -563,7 +541,6 @@ local function npcBehavior()
         end
     end
     
-    -- Случайная пауза
     if math.random() < CONFIG.PAUSE_CHANCE and not Memory.isPaused and Memory.exploreTarget then
         Memory.isPaused = true
         Memory.pauseTimer = CONFIG.PAUSE_TIME * (0.5 + math.random() * 0.5)
@@ -574,7 +551,6 @@ local function npcBehavior()
         return
     end
     
-    -- Движение к точке
     if Memory.exploreTarget then
         local dist = getDistance(rootPart.Position, Memory.exploreTarget)
         if dist < CONFIG.WAYPOINT_REACH_DIST then
@@ -680,7 +656,7 @@ local function createGUI()
     info3.Size = UDim2.new(1, 0, 0, 20)
     info3.Position = UDim2.new(0, 0, 0, 72)
     info3.BackgroundTransparency = 1
-    info3.Text = "🔵 Точки пути подняты выше"
+    info3.Text = "🔵 Точки на уровне туловища (+3)"
     info3.TextColor3 = Color3.fromRGB(100, 200, 255)
     info3.TextSize = 12
     info3.Font = Enum.Font.SourceSans
@@ -758,7 +734,7 @@ gui.restartBtn.MouseButton1Click:Connect(restartScript)
 -- ============================================
 addLog("🌾 FARMER AI v1.1 ЗАГРУЖЕН!")
 addLog("🚶 Мирный режим: исследование карты")
-addLog("🔵 Точки пути подняты выше")
+addLog("🔵 Точки на уровне туловища (+3)")
 addLog("⏳ 15 сек до смены точки")
 addLog("👥 Alt+ПКМ по игроку = следование")
 
