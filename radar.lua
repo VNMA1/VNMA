@@ -1,9 +1,9 @@
 --[[
-   КВАДРАТНЫЙ РАДАР С ПОВОРОТОМ ОТ КАМЕРЫ (БЕЗ КАРТИНОК)
-   - Чёрный фон, яркая сетка
+   КВАДРАТНЫЙ РАДАР С СЕКТОРОМ ОБЗОРА
+   - Чёрный фон, без сетки
    - Перетаскивание мышкой/пальцем
-   - Друзья — зелёные, враги — красные (маленькие точки)
-   - Синий треугольник из текста в центре показывает направление
+   - Друзья — зелёные, враги — красные
+   - Сектор из трёх линий показывает направление камеры
    - Дальность 1000 студей
 ]]
 
@@ -24,13 +24,15 @@ end
 destroyOldRadar()
 
 -- НАСТРОЙКИ
-local RADAR_SIZE = 200               -- чуть больше для комфорта
+local RADAR_SIZE = 200
 local MAX_RANGE = 1000
-local BLIP_SIZE = 3                  -- очень маленькие точки
+local BLIP_SIZE = 4                  -- чуть крупнее
 local FRIEND_CACHE_TIME = 3
+local SECTOR_ANGLE = 30              -- градусы отклонения боковых линий
+local LINE_LENGTH = 0.3              -- длина линий относительно радиуса
 
--- Переменные для хранения объектов
-local gui, radar, dragButton, centerArrow
+-- Переменные
+local gui, radar, dragButton, sectorContainer
 local blips = {}
 local friendCache = {}
 local lastFriendUpdate = 0
@@ -62,45 +64,39 @@ local function CreateRadar()
     dragButton.ZIndex = 10
     dragButton.Parent = radar
 
-    -- ---- СЕТКА (яркие линии) ----
-    local function createLine(rotation, color, sizeX, sizeY, posX, posY)
+    -- ---- СЕКТОР ОБЗОРА (три линии) ----
+    sectorContainer = Instance.new("Frame")
+    sectorContainer.Size = UDim2.new(1, 0, 1, 0)
+    sectorContainer.AnchorPoint = Vector2.new(0.5, 0.5)
+    sectorContainer.Position = UDim2.new(0.5, 0, 0.5, 0)
+    sectorContainer.BackgroundTransparency = 1
+    sectorContainer.ClipsDescendants = false
+    sectorContainer.ZIndex = 4
+    sectorContainer.Parent = radar
+
+    local function createSectorLine(rotation, length, color, thickness)
         local line = Instance.new("Frame")
-        line.Size = UDim2.new(sizeX, 0, sizeY, 0)
-        line.AnchorPoint = Vector2.new(0.5, 0.5)
-        line.Position = UDim2.new(posX, 0, posY, 0)
+        line.Size = UDim2.new(0, 0, length, thickness)  -- длина по Y, толщина по X
+        line.AnchorPoint = Vector2.new(0.5, 0)           -- центр по X, верх по Y
+        line.Position = UDim2.new(0.5, 0, 0.5, 0)        -- старт из центра
         line.BackgroundColor3 = color
-        line.BackgroundTransparency = 0.2   -- почти непрозрачные
+        line.BackgroundTransparency = 0.4
         line.BorderSizePixel = 0
         line.Rotation = rotation
-        line.ZIndex = 1
-        line.Parent = radar
+        line.ZIndex = 4
+        line.Parent = sectorContainer
         return line
     end
 
-    local lineColor = Color3.fromRGB(180, 180, 180)
+    local lineColor = Color3.fromRGB(180, 180, 255)   -- светло-голубой
+    local lineThickness = 2                           -- пикселя
 
-    for y = 0.25, 0.75, 0.25 do
-        createLine(0, lineColor, 0.9, 0.01, 0.5, y)   -- толщина 0.01
-    end
-    for x = 0.25, 0.75, 0.25 do
-        createLine(0, lineColor, 0.01, 0.9, x, 0.5)
-    end
-
-    -- ---- СИНИЙ ТРЕУГОЛЬНИК (ТЕКСТ) ----
-    centerArrow = Instance.new("TextLabel")
-    centerArrow.Size = UDim2.new(0, 14, 0, 14)   -- чуть больше для видимости
-    centerArrow.AnchorPoint = Vector2.new(0.5, 0.5)
-    centerArrow.Position = UDim2.new(0.5, 0, 0.5, 0)
-    centerArrow.BackgroundTransparency = 1
-    centerArrow.Text = "▲"                     -- треугольник вверх
-    centerArrow.TextColor3 = Color3.fromRGB(0, 150, 255)
-    centerArrow.TextSize = 14
-    centerArrow.Font = Enum.Font.SourceSansBold
-    centerArrow.TextXAlignment = Enum.TextXAlignment.Center
-    centerArrow.TextYAlignment = Enum.TextYAlignment.Center
-    centerArrow.ZIndex = 6
-    centerArrow.Parent = radar
-    centerArrow.Name = "CenterArrow"
+    -- Центральная линия (прямо вверх)
+    createSectorLine(0, LINE_LENGTH, lineColor, lineThickness)
+    -- Левая линия (отклонение влево)
+    createSectorLine(-SECTOR_ANGLE, LINE_LENGTH * 0.85, lineColor, lineThickness)
+    -- Правая линия (отклонение вправо)
+    createSectorLine(SECTOR_ANGLE, LINE_LENGTH * 0.85, lineColor, lineThickness)
 
     -- ---- ТЕКСТ ПОД РАДАРОМ ----
     local label = Instance.new("TextLabel")
@@ -152,7 +148,7 @@ local function CreateRadar()
         end
     end)
 
-    return gui, radar, dragButton, centerArrow
+    return gui, radar, dragButton, sectorContainer
 end
 
 -- ИНИЦИАЛИЗАЦИЯ
@@ -175,8 +171,8 @@ RunService.RenderStepped:Connect(function()
         -- Угол камеры
         local camLook = Camera.CFrame.LookVector
         local angle = math.atan2(camLook.X, -camLook.Z)
-        if centerArrow then
-            centerArrow.Rotation = math.deg(angle)
+        if sectorContainer then
+            sectorContainer.Rotation = math.deg(angle)
         end
 
         -- Обновляем кэш друзей
@@ -236,9 +232,8 @@ RunService.RenderStepped:Connect(function()
                 blip.AnchorPoint = Vector2.new(0.5, 0.5)
                 blip.BackgroundColor3 = color
                 blip.BorderSizePixel = 0
-                blip.ZIndex = 3
+                blip.ZIndex = 5   -- поверх линий
                 blip.Parent = radar
-                -- круглое пятнышко
                 local corner = Instance.new("UICorner")
                 corner.CornerRadius = UDim.new(1, 0)
                 corner.Parent = blip
@@ -262,4 +257,4 @@ RunService.RenderStepped:Connect(function()
     end)
 end)
 
-print("Radar loaded. Triangle from text, tiny dots, range 1000.")
+print("Radar loaded. Sector lines, no grid, dots size 4.")
