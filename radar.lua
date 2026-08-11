@@ -1,50 +1,42 @@
 --[[
-   РАДАР ДЛЯ ROBLOX (LUAU) – ДРУЗЬЯ/ВРАГИ + ПЕРЕТАСКИВАНИЕ (ОПТИМИЗИРОВАН)
-   - Квадратный радар в правом верхнем углу (можно переместить)
-   - Радиус сканирования: 500 студей
-   - Друзья — 🟢 зелёные точки, враги — 🔴 красные
-   - Стрелка указывает направление взгляда
-   - Перетаскивание мышкой / пальцем
-   - Кэш друзей (обновление раз в 3 сек)
-   - Лёгкие точки (ImageLabel вместо Frame+UICorner)
---]]
+   РАДАР ДЛЯ ROBLOX (LUAU) – ДРУЗЬЯ/ВРАГИ + ПЕРЕТАСКИВАНИЕ
+   ИСПРАВЛЕННАЯ ВЕРСИЯ (РАБОЧИЕ ID)
+]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
-if not LocalPlayer or not Camera then return end -- защита от запуска до загрузки
+if not LocalPlayer or not Camera then return end
 
--- Проверка, что радар ещё не создан (чтобы не дублировать)
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
 if playerGui:FindFirstChild("RadarGUI") then
-    return -- уже есть, выходим
+    playerGui.RadarGUI:Destroy()  -- удаляем старый, чтобы создать новый
 end
 
 -- НАСТРОЙКИ
 local RADAR_SIZE = 200
 local MAX_RANGE = 500
-local BLIP_SIZE = 8          -- увеличил для лучшей видимости
-local ARROW_SIZE = 14
-local FRIEND_CACHE_TIME = 3  -- обновлять список друзей каждые 3 секунды
+local BLIP_SIZE = 8
+local ARROW_SIZE = 18
+local FRIEND_CACHE_TIME = 3
 
 -- СОЗДАНИЕ GUI
 local function CreateRadar()
     local gui = Instance.new("ScreenGui")
     gui.Name = "RadarGUI"
     gui.Parent = playerGui
+    gui.ResetOnSpawn = false
 
     local radar = Instance.new("Frame")
     radar.Size = UDim2.new(0, RADAR_SIZE, 0, RADAR_SIZE)
-    -- Стартовая позиция – правый верхний угол, но AnchorPoint (0,0) для правильного перетаскивания
     radar.Position = UDim2.new(1, -(RADAR_SIZE + 20), 0, 20)
-    radar.AnchorPoint = Vector2.new(0, 0)  -- <-- исправлено!
+    radar.AnchorPoint = Vector2.new(0, 0)
     radar.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    radar.BackgroundTransparency = 0.4
+    radar.BackgroundTransparency = 0.3
     radar.BorderSizePixel = 1
-    radar.BorderColor3 = Color3.fromRGB(255, 255, 255)
+    radar.BorderColor3 = Color3.fromRGB(200, 200, 200)
     radar.ClipsDescendants = true
     radar.Parent = gui
 
@@ -52,7 +44,7 @@ local function CreateRadar()
     corner.CornerRadius = UDim.new(0, 5)
     corner.Parent = radar
 
-    -- Прозрачная кнопка для перетаскивания
+    -- Кнопка для перетаскивания
     local dragButton = Instance.new("TextButton")
     dragButton.Size = UDim2.new(1, 0, 1, 0)
     dragButton.BackgroundTransparency = 1
@@ -61,24 +53,26 @@ local function CreateRadar()
     dragButton.ZIndex = 10
     dragButton.Parent = radar
 
-    -- Центральная точка (вы) – теперь ImageLabel для однообразия
-    local selfDot = Instance.new("ImageLabel")
+    -- Центральная точка (вы) – Frame + UICorner
+    local selfDot = Instance.new("Frame")
     selfDot.Size = UDim2.new(0, 8, 0, 8)
     selfDot.AnchorPoint = Vector2.new(0.5, 0.5)
     selfDot.Position = UDim2.new(0.5, 0, 0.5, 0)
-    selfDot.BackgroundTransparency = 1
-    selfDot.Image = "rbxassetid://1500860382"  -- круг
-    selfDot.ImageColor3 = Color3.fromRGB(0, 255, 255)
+    selfDot.BackgroundColor3 = Color3.fromRGB(0, 255, 255)
+    selfDot.BorderSizePixel = 0
     selfDot.ZIndex = 5
     selfDot.Parent = radar
+    local dotCorner = Instance.new("UICorner")
+    dotCorner.CornerRadius = UDim.new(1, 0)
+    dotCorner.Parent = selfDot
 
-    -- Стрелка (оставляем как есть)
+    -- Стрелка – используем рабочий ID
     local arrow = Instance.new("ImageLabel")
     arrow.Size = UDim2.new(0, ARROW_SIZE, 0, ARROW_SIZE)
     arrow.AnchorPoint = Vector2.new(0.5, 0.5)
     arrow.Position = UDim2.new(0.5, 0, 0.5, 0)
     arrow.BackgroundTransparency = 1
-    arrow.Image = "rbxassetid://6031094979"
+    arrow.Image = "rbxassetid://13655626325"  -- рабочая стрелка вверх
     arrow.ImageColor3 = Color3.fromRGB(255, 255, 255)
     arrow.ZIndex = 6
     arrow.Parent = radar
@@ -88,31 +82,29 @@ end
 
 local gui, radar, dragButton, arrow = CreateRadar()
 
--- ХРАНИЛИЩЕ ТОЧЕК (ключ – игрок, значение – ImageLabel)
+-- ХРАНИЛИЩЕ ТОЧЕК
 local blips = {}
 
--- ФУНКЦИЯ СОЗДАНИЯ ТОЧКИ (теперь ImageLabel, без UICorner)
+-- ФУНКЦИЯ СОЗДАНИЯ ТОЧКИ (Frame + UICorner)
 local function CreateBlip(color)
-    local blip = Instance.new("ImageLabel")
+    local blip = Instance.new("Frame")
     blip.Size = UDim2.new(0, BLIP_SIZE, 0, BLIP_SIZE)
     blip.AnchorPoint = Vector2.new(0.5, 0.5)
-    blip.BackgroundTransparency = 1
-    blip.Image = "rbxassetid://1500860382"  -- круг
-    blip.ImageColor3 = color
+    blip.BackgroundColor3 = color
+    blip.BorderSizePixel = 0
     blip.ZIndex = 3
     blip.Parent = radar
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = blip
     return blip
 end
 
--- ПОЛУЧИТЬ HRP (с проверкой на существование)
+-- ПОЛУЧИТЬ HRP
 local function GetHRP(player)
     local char = player.Character
     if not char then return nil end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if hrp and hrp:IsA("BasePart") then
-        return hrp
-    end
-    return nil
+    return char:FindFirstChild("HumanoidRootPart")
 end
 
 -- ======== ПЕРЕТАСКИВАНИЕ ========
@@ -122,11 +114,11 @@ local dragOffset = Vector2.new()
 local function updateDrag(input)
     local newX = input.Position.X - dragOffset.X
     local newY = input.Position.Y - dragOffset.Y
-    radar.Position = UDim2.new(0, newX, 0, newY)  -- используем абсолютные координаты
+    radar.Position = UDim2.new(0, newX, 0, newY)
 end
 
 local function startDrag(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or 
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or
        input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         local absPos = radar.AbsolutePosition
@@ -155,22 +147,18 @@ end
 
 dragButton.InputEnded:Connect(endDrag)
 
--- ======== КЭШ ДРУЗЕЙ (обновление раз в FRIEND_CACHE_TIME) ========
+-- ======== КЭШ ДРУЗЕЙ ========
 local friendCache = {}
 local lastFriendUpdate = 0
 
 local function updateFriendCache()
     local now = tick()
-    if now - lastFriendUpdate < FRIEND_CACHE_TIME then
-        return
-    end
+    if now - lastFriendUpdate < FRIEND_CACHE_TIME then return end
     lastFriendUpdate = now
     local newCache = {}
-    local players = Players:GetPlayers()
-    for _, p in ipairs(players) do
+    for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then
-            local isFriend = p:IsFriendsWith(LocalPlayer.UserId)
-            if isFriend then
+            if p:IsFriendsWith(LocalPlayer.UserId) then
                 newCache[p.UserId] = true
             end
         end
@@ -178,60 +166,48 @@ local function updateFriendCache()
     friendCache = newCache
 end
 
--- ======== ОСНОВНОЙ ЦИКЛ ОБНОВЛЕНИЯ ========
+-- ======== ОСНОВНОЙ ЦИКЛ ========
 RunService.RenderStepped:Connect(function()
-    -- Обработка ошибок, чтобы скрипт не падал
-    local success, err = pcall(function()
+    pcall(function()
         local myHRP = GetHRP(LocalPlayer)
         if not myHRP then return end
-
         local myPos = myHRP.Position
 
-        -- Стрелка
+        -- Обновляем стрелку
         local camLook = Camera.CFrame.LookVector
         local angle = math.atan2(camLook.X, -camLook.Z)
         arrow.Rotation = math.deg(angle)
 
-        -- Обновляем кэш друзей (не каждый кадр)
         updateFriendCache()
 
-        local players = Players:GetPlayers()
         local halfSize = RADAR_SIZE / 2
+        local players = Players:GetPlayers()
 
         for _, player in ipairs(players) do
             if player == LocalPlayer then continue end
-
             local hrp = GetHRP(player)
             if not hrp then
-                if blips[player] then
-                    blips[player].Visible = false
-                end
+                if blips[player] then blips[player].Visible = false end
                 continue
             end
 
             local targetPos = hrp.Position
-            local distance = (myPos - targetPos).Magnitude
+            local dist = (myPos - targetPos).Magnitude
 
-            -- Если дальше радиуса – скрываем точку
-            if distance > MAX_RANGE then
-                if blips[player] then
-                    blips[player].Visible = false
-                end
+            if dist > MAX_RANGE then
+                if blips[player] then blips[player].Visible = false end
                 continue
             end
 
-            -- Вычисляем относительные координаты
             local dx = targetPos.X - myPos.X
             local dz = targetPos.Z - myPos.Z
             local scale = halfSize / MAX_RANGE
             local rx = dx * scale
             local ry = -dz * scale
 
-            -- Определяем цвет по кэшу друзей
             local isFriend = friendCache[player.UserId] == true
             local color = isFriend and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
 
-            -- Создаём или обновляем точку
             local blip = blips[player]
             if not blip then
                 blip = CreateBlip(color)
@@ -240,14 +216,12 @@ RunService.RenderStepped:Connect(function()
 
             blip.Position = UDim2.new(0.5, rx, 0.5, ry)
             blip.Visible = true
-
-            -- Меняем цвет, если изменился статус (на всякий случай)
-            if blip.ImageColor3 ~= color then
-                blip.ImageColor3 = color
+            if blip.BackgroundColor3 ~= color then
+                blip.BackgroundColor3 = color
             end
         end
 
-        -- Удаляем точки для игроков, которые покинули игру
+        -- Удаляем точки для ушедших игроков
         for player, blip in pairs(blips) do
             if not player.Parent then
                 blip:Destroy()
@@ -255,10 +229,6 @@ RunService.RenderStepped:Connect(function()
             end
         end
     end)
-
-    if not success then
-        warn("[Radar Error] " .. tostring(err))
-    end
 end)
 
-print ("Radar loaded successfully.")
+print("Radar loaded successfully. Arrow and dots should be visible now.")
