@@ -1,6 +1,6 @@
 --[[
-   КВАДРАТНЫЙ РАДАР С СЕТКОЙ И СЕКТОРОМ ОБЗОРА (ИСПРАВЛЕННЫЙ)
-   - Чёрный фон, круги и линии сетки
+   КВАДРАТНЫЙ РАДАР С СЕТКОЙ И СЕКТОРОМ ОБЗОРА (ФИНАЛ)
+   - Чёрный фон, круги и линии сетки (яркие)
    - Перетаскивание мышкой/пальцем
    - Друзья — зелёные, враги — красные
    - Сектор из трёх линий показывает направление камеры
@@ -16,7 +16,7 @@ if not LocalPlayer or not Camera then return end
 
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
 
--- Удаляем старый радар, если есть
+-- Удаляем старый радар
 local function destroyOldRadar()
     local old = playerGui:FindFirstChild("RadarGUI")
     if old then old:Destroy() end
@@ -28,11 +28,12 @@ local RADAR_SIZE = 200
 local MAX_RANGE = 1000
 local BLIP_SIZE = 4
 local FRIEND_CACHE_TIME = 3
-local SECTOR_ANGLE = 30              -- градусы отклонения боковых линий
-local LINE_LENGTH = 0.35             -- длина линий относительно радиуса
+local SECTOR_ANGLE = 30
+local LINE_LENGTH = 0.35
 
 -- Переменные
-local gui, radar, dragButton, sectorContainer
+local gui, radar, dragButton
+local sectorLines = {}  -- таблица для хранения трёх линий сектора
 local blips = {}
 local friendCache = {}
 local lastFriendUpdate = 0
@@ -81,9 +82,9 @@ local function CreateRadar()
         return circle
     end
 
-    local gridColor = Color3.fromRGB(100, 150, 200)
-    createCircle(0.5, gridColor, 1)   -- средняя окружность (50% радиуса)
-    createCircle(0.25, gridColor, 1)  -- внутренняя окружность (25% радиуса)
+    local gridColor = Color3.fromRGB(130, 180, 230)
+    createCircle(0.5, gridColor, 2)   -- средняя
+    createCircle(0.25, gridColor, 2)  -- внутренняя
 
     -- ---- ЛИНИИ СЕТКИ (горизонталь, вертикаль, диагонали) ----
     local function createLine(rotation, color, sizeX, sizeY, posX, posY)
@@ -92,7 +93,7 @@ local function CreateRadar()
         line.AnchorPoint = Vector2.new(0.5, 0.5)
         line.Position = UDim2.new(posX, 0, posY, 0)
         line.BackgroundColor3 = color
-        line.BackgroundTransparency = 0.5
+        line.BackgroundTransparency = 0.3
         line.BorderSizePixel = 0
         line.Rotation = rotation
         line.ZIndex = 1
@@ -100,40 +101,36 @@ local function CreateRadar()
         return line
     end
 
-    local lineColor = Color3.fromRGB(80, 120, 180)
-    createLine(0, lineColor, 0.8, 0.008, 0.5, 0.5)    -- вертикаль
-    createLine(90, lineColor, 0.8, 0.008, 0.5, 0.5)   -- горизонталь
-    createLine(45, lineColor, 0.7, 0.006, 0.5, 0.5)   -- диагональ
-    createLine(135, lineColor, 0.7, 0.006, 0.5, 0.5)  -- диагональ
+    local lineColor = Color3.fromRGB(100, 150, 200)
+    createLine(0, lineColor, 0.8, 0.012, 0.5, 0.5)    -- вертикаль (толще)
+    createLine(90, lineColor, 0.8, 0.012, 0.5, 0.5)   -- горизонталь
+    createLine(45, lineColor, 0.7, 0.01, 0.5, 0.5)    -- диагональ
+    createLine(135, lineColor, 0.7, 0.01, 0.5, 0.5)   -- диагональ
 
     -- ---- СЕКТОР ОБЗОРА (три линии) ----
-    sectorContainer = Instance.new("Frame")
-    sectorContainer.Size = UDim2.new(1, 0, 1, 0)
-    sectorContainer.AnchorPoint = Vector2.new(0.5, 0.5)
-    sectorContainer.Position = UDim2.new(0.5, 0, 0.5, 0)
-    sectorContainer.BackgroundTransparency = 1
-    sectorContainer.ClipsDescendants = false
-    sectorContainer.ZIndex = 4
-    sectorContainer.Parent = radar
-
+    -- Создаём линии прямо в radar, без отдельного контейнера
     local function createSectorLine(rotation, length, color, thickness)
         local line = Instance.new("Frame")
-        line.Size = UDim2.new(0, 0, length, thickness)
-        line.AnchorPoint = Vector2.new(0.5, 0)
-        line.Position = UDim2.new(0.5, 0, 0.5, 0)
+        line.Size = UDim2.new(0, 0, length, thickness)  -- длина по Y, толщина по X
+        line.AnchorPoint = Vector2.new(0.5, 0)           -- центр по X, верх по Y
+        line.Position = UDim2.new(0.5, 0, 0.5, 0)        -- старт из центра
         line.BackgroundColor3 = color
-        line.BackgroundTransparency = 0.3
+        line.BackgroundTransparency = 0.2
         line.BorderSizePixel = 0
         line.Rotation = rotation
         line.ZIndex = 4
-        line.Parent = sectorContainer
+        line.Parent = radar
         return line
     end
 
-    local sectorColor = Color3.fromRGB(180, 200, 255)
-    createSectorLine(0, LINE_LENGTH, sectorColor, 2)                -- центр
-    createSectorLine(-SECTOR_ANGLE, LINE_LENGTH * 0.85, sectorColor, 2) -- лево
-    createSectorLine(SECTOR_ANGLE, LINE_LENGTH * 0.85, sectorColor, 2)  -- право
+    local sectorColor = Color3.fromRGB(200, 220, 255)
+    -- Центральная линия
+    local centerLine = createSectorLine(0, LINE_LENGTH, sectorColor, 3)
+    -- Левая
+    local leftLine = createSectorLine(-SECTOR_ANGLE, LINE_LENGTH * 0.85, sectorColor, 2)
+    -- Правая
+    local rightLine = createSectorLine(SECTOR_ANGLE, LINE_LENGTH * 0.85, sectorColor, 2)
+    sectorLines = {centerLine, leftLine, rightLine}
 
     -- ---- ТЕКСТ ПОД РАДАРОМ ----
     local label = Instance.new("TextLabel")
@@ -183,7 +180,7 @@ local function CreateRadar()
         end
     end)
 
-    return gui, radar, dragButton, sectorContainer
+    return gui, radar, dragButton
 end
 
 -- ИНИЦИАЛИЗАЦИЯ
@@ -203,11 +200,16 @@ RunService.RenderStepped:Connect(function()
         if not myHRP then return end
         local myPos = myHRP.Position
 
-        -- Исправленный угол камеры (правильная ориентация)
+        -- Угол камеры (верх радара = направление камеры)
         local camLook = Camera.CFrame.LookVector
-        local angle = math.atan2(-camLook.X, -camLook.Z)  -- <-- ключевое исправление
-        if sectorContainer then
-            sectorContainer.Rotation = math.deg(angle)
+        local angle = math.atan2(camLook.X, -camLook.Z)  -- правильная ориентация
+        local degAngle = math.deg(angle)
+
+        -- Обновляем поворот трёх линий сектора
+        if sectorLines and #sectorLines >= 3 then
+            sectorLines[1].Rotation = degAngle               -- центр
+            sectorLines[2].Rotation = degAngle - SECTOR_ANGLE -- лево
+            sectorLines[3].Rotation = degAngle + SECTOR_ANGLE -- право
         end
 
         -- Обновляем кэш друзей
@@ -251,7 +253,7 @@ RunService.RenderStepped:Connect(function()
             local dx = targetPos.X - myPos.X
             local dz = targetPos.Z - myPos.Z
 
-            -- Поворачиваем вектор на угол камеры
+            -- Поворачиваем вектор на угол камеры (чтобы верх радара совпадал с направлением)
             local rotX = dx * cosA - dz * sinA
             local rotY = dx * sinA + dz * cosA
             local rx = rotX * scale
@@ -292,4 +294,4 @@ RunService.RenderStepped:Connect(function()
     end)
 end)
 
-print("Radar loaded. Fixed rotation, grid restored.")
+print("Radar loaded. Fixed rotation, thick grid, sector lines.")
