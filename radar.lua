@@ -1,9 +1,10 @@
 --[[
-   КВАДРАТНЫЙ РАДАР С КНОПКАМИ УПРАВЛЕНИЯ
+   КВАДРАТНЫЙ РАДАР С ПОВОРОТОМ ОТ КАМЕРЫ
    - Чёрный фон, сетка
    - Перетаскивание мышкой/пальцем
    - Друзья — зелёные, враги — красные
-   - Кнопки: X (закрыть), R (перезапустить)
+   - Синий треугольник в центре показывает направление взгляда
+   - Дальность 1000 студей
 ]]
 
 local Players = game:GetService("Players")
@@ -24,17 +25,17 @@ destroyOldRadar()
 
 -- НАСТРОЙКИ
 local RADAR_SIZE = 180
-local MAX_RANGE = 500
+local MAX_RANGE = 1000
 local BLIP_SIZE = 6
 local FRIEND_CACHE_TIME = 3
 
 -- Переменные для хранения объектов
-local gui, radar, dragButton, arrow
+local gui, radar, dragButton, centerArrow
 local blips = {}
 local friendCache = {}
 local lastFriendUpdate = 0
 
--- ФУНКЦИЯ СОЗДАНИЯ РАДАРА (возвращает объекты)
+-- ФУНКЦИЯ СОЗДАНИЯ РАДАРА
 local function CreateRadar()
     gui = Instance.new("ScreenGui")
     gui.Name = "RadarGUI"
@@ -85,77 +86,31 @@ local function CreateRadar()
         createLine(0, lineColor, 0.005, 0.9, x, 0.5)
     end
 
-    -- ---- ТОЧКА В ЦЕНТРЕ (ВЫ) ----
-    local selfDot = Instance.new("Frame")
-    selfDot.Size = UDim2.new(0, 8, 0, 8)
-    selfDot.AnchorPoint = Vector2.new(0.5, 0.5)
-    selfDot.Position = UDim2.new(0.5, 0, 0.5, 0)
-    selfDot.BackgroundColor3 = Color3.fromRGB(0, 255, 255)
-    selfDot.BorderSizePixel = 0
-    selfDot.ZIndex = 5
-    selfDot.Parent = radar
-    local dotCorner = Instance.new("UICorner")
-    dotCorner.CornerRadius = UDim.new(1, 0)
-    dotCorner.Parent = selfDot
+    -- ---- СИНИЙ ТРЕУГОЛЬНИК В ЦЕНТРЕ (ВЫ, указывает направление камеры) ----
+    centerArrow = Instance.new("ImageLabel")
+    centerArrow.Size = UDim2.new(0, 12, 0, 12)   -- чуть меньше прежней точки
+    centerArrow.AnchorPoint = Vector2.new(0.5, 0.5)
+    centerArrow.Position = UDim2.new(0.5, 0, 0.5, 0)
+    centerArrow.BackgroundTransparency = 1
+    centerArrow.Image = "rbxassetid://6031094979"   -- треугольник-стрелка
+    centerArrow.ImageColor3 = Color3.fromRGB(0, 150, 255)   -- ярко-синий
+    centerArrow.ZIndex = 6
+    centerArrow.Parent = radar
+    centerArrow.Name = "CenterArrow"
 
-    -- ---- СТРЕЛКА (треугольник) ----
-    arrow = Instance.new("ImageLabel")
-    arrow.Size = UDim2.new(0, 20, 0, 20)
-    arrow.AnchorPoint = Vector2.new(0.5, 0.5)
-    arrow.Position = UDim2.new(0.5, 0, 0.5, 0)
-    arrow.BackgroundTransparency = 1
-    arrow.Image = "rbxassetid://6031094979"  -- рабочая стрелка
-    arrow.ImageColor3 = Color3.fromRGB(255, 255, 255)
-    arrow.ZIndex = 6
-    arrow.Parent = radar
-    arrow.Name = "Arrow"
-
-    -- ---- НИЖНЯЯ ПАНЕЛЬ С ТЕКСТОМ И КНОПКАМИ ----
-    local bottomPanel = Instance.new("Frame")
-    bottomPanel.Size = UDim2.new(0, RADAR_SIZE, 0, 30)
-    bottomPanel.Position = UDim2.new(0, 0, 1, 5)
-    bottomPanel.BackgroundTransparency = 1
-    bottomPanel.Parent = radar
-
-    -- Текст
+    -- ---- ТЕКСТ ПОД РАДАРОМ (без кнопок) ----
     local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(0.6, 0, 1, 0)
-    label.Position = UDim2.new(0, 0, 0, 0)
+    label.Size = UDim2.new(0, RADAR_SIZE, 0, 20)
+    label.Position = UDim2.new(0, 0, 1, 5)
     label.BackgroundTransparency = 1
     label.Text = "TGK: VNMA0"
     label.TextColor3 = Color3.fromRGB(200, 200, 200)
     label.TextSize = 14
     label.Font = Enum.Font.Code
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = bottomPanel
+    label.TextXAlignment = Enum.TextXAlignment.Center
+    label.Parent = radar
 
-    -- Кнопка "Закрыть" (красный X)
-    local closeBtn = Instance.new("TextButton")
-    closeBtn.Size = UDim2.new(0.2, 0, 1, 0)
-    closeBtn.Position = UDim2.new(0.6, 0, 0, 0)
-    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    closeBtn.Text = "X"
-    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    closeBtn.TextSize = 16
-    closeBtn.Font = Enum.Font.SourceSansBold
-    closeBtn.BorderSizePixel = 1
-    closeBtn.BorderColor3 = Color3.fromRGB(150, 0, 0)
-    closeBtn.Parent = bottomPanel
-
-    -- Кнопка "Перезапуск" (зелёная R)
-    local restartBtn = Instance.new("TextButton")
-    restartBtn.Size = UDim2.new(0.2, 0, 1, 0)
-    restartBtn.Position = UDim2.new(0.8, 0, 0, 0)
-    restartBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
-    restartBtn.Text = "R"
-    restartBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    restartBtn.TextSize = 16
-    restartBtn.Font = Enum.Font.SourceSansBold
-    restartBtn.BorderSizePixel = 1
-    restartBtn.BorderColor3 = Color3.fromRGB(0, 100, 0)
-    restartBtn.Parent = bottomPanel
-
-    -- ---- ПЕРЕТАСКИВАНИЕ (внутри функции, чтобы замыкать radar) ----
+    -- ---- ПЕРЕТАСКИВАНИЕ ----
     local dragging = false
     local dragOffset = Vector2.new()
 
@@ -193,31 +148,7 @@ local function CreateRadar()
         end
     end)
 
-    -- ---- ОБРАБОТЧИКИ КНОПОК ----
-    closeBtn.MouseButton1Click:Connect(function()
-        if gui then gui:Destroy() end
-        for _, blip in pairs(blips) do
-            blip:Destroy()
-        end
-        table.clear(blips)
-        friendCache = {}
-        lastFriendUpdate = 0
-        print("Radar closed.")
-    end)
-
-    restartBtn.MouseButton1Click:Connect(function()
-        if gui then gui:Destroy() end
-        for _, blip in pairs(blips) do
-            blip:Destroy()
-        end
-        table.clear(blips)
-        friendCache = {}
-        lastFriendUpdate = 0
-        CreateRadar()
-        print("Radar restarted.")
-    end)
-
-    return gui, radar, dragButton, arrow
+    return gui, radar, dragButton, centerArrow
 end
 
 -- ИНИЦИАЛИЗАЦИЯ
@@ -237,14 +168,14 @@ RunService.RenderStepped:Connect(function()
         if not myHRP then return end
         local myPos = myHRP.Position
 
-        -- Поворачиваем стрелку
+        -- Угол камеры
         local camLook = Camera.CFrame.LookVector
         local angle = math.atan2(camLook.X, -camLook.Z)
-        if arrow then
-            arrow.Rotation = math.deg(angle)
+        if centerArrow then
+            centerArrow.Rotation = math.deg(angle)
         end
 
-        -- Обновляем кэш друзей (раз в FRIEND_CACHE_TIME секунд)
+        -- Обновляем кэш друзей
         local now = tick()
         if now - lastFriendUpdate >= FRIEND_CACHE_TIME then
             lastFriendUpdate = now
@@ -260,6 +191,10 @@ RunService.RenderStepped:Connect(function()
         end
 
         local halfSize = RADAR_SIZE / 2
+        local scale = halfSize / MAX_RANGE
+        local cosA = math.cos(angle)
+        local sinA = math.sin(angle)
+
         local players = Players:GetPlayers()
 
         for _, player in ipairs(players) do
@@ -280,9 +215,12 @@ RunService.RenderStepped:Connect(function()
 
             local dx = targetPos.X - myPos.X
             local dz = targetPos.Z - myPos.Z
-            local scale = halfSize / MAX_RANGE
-            local rx = dx * scale
-            local ry = -dz * scale
+
+            -- Поворачиваем вектор на угол камеры, затем отражаем Z
+            local rotX = dx * cosA - dz * sinA
+            local rotY = dx * sinA + dz * cosA
+            local rx = rotX * scale
+            local ry = -rotY * scale
 
             local isFriend = friendCache[player.UserId] == true
             local color = isFriend and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
@@ -320,4 +258,4 @@ RunService.RenderStepped:Connect(function()
     end)
 end)
 
-print("Radar loaded. Use X to close, R to restart.")
+print("Radar loaded. Rotates with camera, range 1000.")
