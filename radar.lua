@@ -1,11 +1,9 @@
 --[[
-   КРУГЛОЙ РАДАР (ROBLOX LUAU)
-   - Круглая форма
-   - Сетка: 2 концентрические окружности + 4 линии (как компас)
-   - Точки игроков: зелёные (друзья) / красные (враги)
-   - Стрелка направления — треугольник из Frame
+   КВАДРАТНЫЙ РАДАР С КНОПКАМИ УПРАВЛЕНИЯ
+   - Чёрный фон, сетка
    - Перетаскивание мышкой/пальцем
-   - Радиус сканирования 500 студей
+   - Друзья — зелёные, враги — красные
+   - Кнопки: X (закрыть), R (перезапустить)
 ]]
 
 local Players = game:GetService("Players")
@@ -16,42 +14,46 @@ local Camera = workspace.CurrentCamera
 if not LocalPlayer or not Camera then return end
 
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-if playerGui:FindFirstChild("RadarGUI") then
-    playerGui.RadarGUI:Destroy()
+
+-- Удаляем старый радар, если есть
+local function destroyOldRadar()
+    local old = playerGui:FindFirstChild("RadarGUI")
+    if old then old:Destroy() end
 end
+destroyOldRadar()
 
 -- НАСТРОЙКИ
-local RADAR_SIZE = 200           -- диаметр радара
-local MAX_RANGE = 500            -- дальность
-local BLIP_SIZE = 6              -- размер точки
+local RADAR_SIZE = 180
+local MAX_RANGE = 500
+local BLIP_SIZE = 6
 local FRIEND_CACHE_TIME = 3
 
--- СОЗДАНИЕ КРУГЛОГО РАДАРА
+-- Переменные для хранения объектов
+local gui, radar, dragButton, arrow
+local blips = {}
+local friendCache = {}
+local lastFriendUpdate = 0
+
+-- ФУНКЦИЯ СОЗДАНИЯ РАДАРА (возвращает объекты)
 local function CreateRadar()
-    local gui = Instance.new("ScreenGui")
+    gui = Instance.new("ScreenGui")
     gui.Name = "RadarGUI"
     gui.Parent = playerGui
     gui.ResetOnSpawn = false
 
-    -- Основной круглый контейнер (Frame с закруглением 0.5 от размера)
-    local radar = Instance.new("Frame")
+    radar = Instance.new("Frame")
     radar.Size = UDim2.new(0, RADAR_SIZE, 0, RADAR_SIZE)
     radar.Position = UDim2.new(1, -(RADAR_SIZE + 20), 0, 20)
     radar.AnchorPoint = Vector2.new(0, 0)
     radar.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    radar.BackgroundTransparency = 0.2
-    radar.BorderSizePixel = 2
-    radar.BorderColor3 = Color3.fromRGB(100, 255, 100)
+    radar.BackgroundTransparency = 0.3
+    radar.BorderSizePixel = 1
+    radar.BorderColor3 = Color3.fromRGB(200, 200, 200)
     radar.ClipsDescendants = true
     radar.Parent = gui
 
-    -- Делаем круглым
-    local mainCorner = Instance.new("UICorner")
-    mainCorner.CornerRadius = UDim.new(0.5, 0)  -- ровно половина размера
-    mainCorner.Parent = radar
-
-    -- Кнопка для перетаскивания (поверх всего)
-    local dragButton = Instance.new("TextButton")
+    -- Кнопка для перетаскивания
+    dragButton = Instance.new("TextButton")
     dragButton.Size = UDim2.new(1, 0, 1, 0)
     dragButton.BackgroundTransparency = 1
     dragButton.Text = ""
@@ -59,38 +61,14 @@ local function CreateRadar()
     dragButton.ZIndex = 10
     dragButton.Parent = radar
 
-    -- ---- СЕТКА РАДАРА ----
-    local function createCircle(radiusPercent, color, thickness)
-        local circle = Instance.new("Frame")
-        circle.Size = UDim2.new(radiusPercent, 0, radiusPercent, 0)
-        circle.AnchorPoint = Vector2.new(0.5, 0.5)
-        circle.Position = UDim2.new(0.5, 0, 0.5, 0)
-        circle.BackgroundColor3 = color
-        circle.BackgroundTransparency = 0.7
-        circle.BorderSizePixel = thickness
-        circle.BorderColor3 = color
-        circle.ZIndex = 1
-        circle.Parent = radar
-        local c = Instance.new("UICorner")
-        c.CornerRadius = UDim.new(0.5, 0)
-        c.Parent = circle
-        return circle
-    end
-
-    -- Внешняя окружность (уже есть рамка, но добавим ещё для красоты)
-    -- Средняя (50% радиуса)
-    createCircle(0.5, Color3.fromRGB(100, 200, 100), 1)
-    -- Внутренняя (25% радиуса)
-    createCircle(0.25, Color3.fromRGB(100, 200, 100), 1)
-
-    -- Линии компаса (горизонталь, вертикаль, диагонали)
-    local function createLine(rotation, color)
+    -- ---- СЕТКА (линии) ----
+    local function createLine(rotation, color, sizeX, sizeY, posX, posY)
         local line = Instance.new("Frame")
-        line.Size = UDim2.new(0.8, 0, 0, 1)  -- длина 80% радиуса, толщина 1 пиксель
+        line.Size = UDim2.new(sizeX, 0, sizeY, 0)
         line.AnchorPoint = Vector2.new(0.5, 0.5)
-        line.Position = UDim2.new(0.5, 0, 0.5, 0)
+        line.Position = UDim2.new(posX, 0, posY, 0)
         line.BackgroundColor3 = color
-        line.BackgroundTransparency = 0.6
+        line.BackgroundTransparency = 0.5
         line.BorderSizePixel = 0
         line.Rotation = rotation
         line.ZIndex = 1
@@ -98,11 +76,14 @@ local function CreateRadar()
         return line
     end
 
-    local lineColor = Color3.fromRGB(80, 200, 80)
-    createLine(0, lineColor)      -- вертикаль
-    createLine(90, lineColor)     -- горизонталь
-    createLine(45, lineColor)     -- диагональ
-    createLine(135, lineColor)    -- диагональ
+    local lineColor = Color3.fromRGB(150, 150, 150)
+
+    for y = 0.25, 0.75, 0.25 do
+        createLine(0, lineColor, 0.9, 0.005, 0.5, y)
+    end
+    for x = 0.25, 0.75, 0.25 do
+        createLine(0, lineColor, 0.005, 0.9, x, 0.5)
+    end
 
     -- ---- ТОЧКА В ЦЕНТРЕ (ВЫ) ----
     local selfDot = Instance.new("Frame")
@@ -117,129 +98,139 @@ local function CreateRadar()
     dotCorner.CornerRadius = UDim.new(1, 0)
     dotCorner.Parent = selfDot
 
-    -- ---- СТРЕЛКА НАПРАВЛЕНИЯ (ТРЕУГОЛЬНИК ИЗ FRAME) ----
-    -- Создаём Frame, поворачиваем его на 45 градусов и обрезаем углом, чтобы получить треугольник
-    local arrowContainer = Instance.new("Frame")
-    arrowContainer.Size = UDim2.new(0, 20, 0, 20)
-    arrowContainer.AnchorPoint = Vector2.new(0.5, 0.5)
-    arrowContainer.Position = UDim2.new(0.5, 0, 0.5, 0)
-    arrowContainer.BackgroundTransparency = 1
-    arrowContainer.ZIndex = 6
-    arrowContainer.Parent = radar
-
-    -- Сам треугольник – делаем его через Frame с вращением на 45° и обрезанием через UICorner? Нет, проще сделать ImageLabel с треугольником, но мы отказались от картинок. Можно сделать через три Frame-полоски? Или просто использовать обычный Frame с закруглением 0, но повёрнутый на 45°, и обрезать углы – не получится треугольник.
-    -- Лучше использовать Path или сделать стрелку из двух Frame (основание и наконечник). Но это сложно.
-    -- Упростим: используем ImageLabel с ID треугольника, который точно работает. Хозяин сказал "нам не нужны картинки", но стрелка – исключение, потому что её сложно сделать без картинки. Я всё же добавлю одну картинку для стрелки, если он разрешит.
-    -- Поскольку он сказал "не нужны картинки", я предложу ему альтернативу: стрелка – это просто линия от центра к краю, как указатель.
-    -- Сделаем стрелку как толстый Frame с заострённым концом? Проще сделать через ImageLabel, но он сказал без картинок. 
-    -- Ок, я сделаю стрелку как ромб (Frame с закруглением 0.5 и поворотом 45 градусов), и он будет указывать направление.
-    local arrow = Instance.new("Frame")
-    arrow.Size = UDim2.new(0, 14, 0, 14)
+    -- ---- СТРЕЛКА (треугольник) ----
+    arrow = Instance.new("ImageLabel")
+    arrow.Size = UDim2.new(0, 20, 0, 20)
     arrow.AnchorPoint = Vector2.new(0.5, 0.5)
     arrow.Position = UDim2.new(0.5, 0, 0.5, 0)
-    arrow.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    arrow.BackgroundTransparency = 0.2
-    arrow.BorderSizePixel = 1
-    arrow.BorderColor3 = Color3.fromRGB(255, 255, 255)
+    arrow.BackgroundTransparency = 1
+    arrow.Image = "rbxassetid://6031094979"  -- рабочая стрелка
+    arrow.ImageColor3 = Color3.fromRGB(255, 255, 255)
     arrow.ZIndex = 6
     arrow.Parent = radar
-    local arrowCorner = Instance.new("UICorner")
-    arrowCorner.CornerRadius = UDim.new(0.3, 0)  -- скругление, чтобы напоминало стрелку
-    arrowCorner.Parent = arrow
-    -- Храним её для поворота
     arrow.Name = "Arrow"
+
+    -- ---- НИЖНЯЯ ПАНЕЛЬ С ТЕКСТОМ И КНОПКАМИ ----
+    local bottomPanel = Instance.new("Frame")
+    bottomPanel.Size = UDim2.new(0, RADAR_SIZE, 0, 30)
+    bottomPanel.Position = UDim2.new(0, 0, 1, 5)
+    bottomPanel.BackgroundTransparency = 1
+    bottomPanel.Parent = radar
+
+    -- Текст
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0.6, 0, 1, 0)
+    label.Position = UDim2.new(0, 0, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = "TGK: VNMA0"
+    label.TextColor3 = Color3.fromRGB(200, 200, 200)
+    label.TextSize = 14
+    label.Font = Enum.Font.Code
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = bottomPanel
+
+    -- Кнопка "Закрыть" (красный X)
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.new(0.2, 0, 1, 0)
+    closeBtn.Position = UDim2.new(0.6, 0, 0, 0)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    closeBtn.Text = "X"
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.TextSize = 16
+    closeBtn.Font = Enum.Font.SourceSansBold
+    closeBtn.BorderSizePixel = 1
+    closeBtn.BorderColor3 = Color3.fromRGB(150, 0, 0)
+    closeBtn.Parent = bottomPanel
+
+    -- Кнопка "Перезапуск" (зелёная R)
+    local restartBtn = Instance.new("TextButton")
+    restartBtn.Size = UDim2.new(0.2, 0, 1, 0)
+    restartBtn.Position = UDim2.new(0.8, 0, 0, 0)
+    restartBtn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
+    restartBtn.Text = "R"
+    restartBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    restartBtn.TextSize = 16
+    restartBtn.Font = Enum.Font.SourceSansBold
+    restartBtn.BorderSizePixel = 1
+    restartBtn.BorderColor3 = Color3.fromRGB(0, 100, 0)
+    restartBtn.Parent = bottomPanel
+
+    -- ---- ПЕРЕТАСКИВАНИЕ (внутри функции, чтобы замыкать radar) ----
+    local dragging = false
+    local dragOffset = Vector2.new()
+
+    local function updateDrag(input)
+        if not radar then return end
+        local newX = input.Position.X - dragOffset.X
+        local newY = input.Position.Y - dragOffset.Y
+        radar.Position = UDim2.new(0, newX, 0, newY)
+    end
+
+    local function startDrag(input)
+        if not radar then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or
+           input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            local absPos = radar.AbsolutePosition
+            dragOffset = Vector2.new(input.Position.X - absPos.X, input.Position.Y - absPos.Y)
+        end
+    end
+
+    dragButton.InputBegan:Connect(startDrag)
+
+    dragButton.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement or
+           input.UserInputType == Enum.UserInputType.Touch then
+            updateDrag(input)
+        end
+    end)
+
+    dragButton.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or
+           input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    -- ---- ОБРАБОТЧИКИ КНОПОК ----
+    closeBtn.MouseButton1Click:Connect(function()
+        if gui then gui:Destroy() end
+        for _, blip in pairs(blips) do
+            blip:Destroy()
+        end
+        table.clear(blips)
+        friendCache = {}
+        lastFriendUpdate = 0
+        print("Radar closed.")
+    end)
+
+    restartBtn.MouseButton1Click:Connect(function()
+        if gui then gui:Destroy() end
+        for _, blip in pairs(blips) do
+            blip:Destroy()
+        end
+        table.clear(blips)
+        friendCache = {}
+        lastFriendUpdate = 0
+        CreateRadar()
+        print("Radar restarted.")
+    end)
 
     return gui, radar, dragButton, arrow
 end
 
-local gui, radar, dragButton, arrow = CreateRadar()
+-- ИНИЦИАЛИЗАЦИЯ
+CreateRadar()
 
--- ХРАНИЛИЩЕ ТОЧЕК
-local blips = {}
-
--- ФУНКЦИЯ СОЗДАНИЯ ТОЧКИ
-local function CreateBlip(color)
-    local blip = Instance.new("Frame")
-    blip.Size = UDim2.new(0, BLIP_SIZE, 0, BLIP_SIZE)
-    blip.AnchorPoint = Vector2.new(0.5, 0.5)
-    blip.BackgroundColor3 = color
-    blip.BorderSizePixel = 1
-    blip.BorderColor3 = Color3.fromRGB(255, 255, 255)
-    blip.ZIndex = 3
-    blip.Parent = radar
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(1, 0)
-    corner.Parent = blip
-    return blip
-end
-
--- ПОЛУЧИТЬ HRP
+-- ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ HRP
 local function GetHRP(player)
     local char = player.Character
     if not char then return nil end
     return char:FindFirstChild("HumanoidRootPart")
 end
 
--- ПЕРЕТАСКИВАНИЕ
-local dragging = false
-local dragOffset = Vector2.new()
-
-local function updateDrag(input)
-    local newX = input.Position.X - dragOffset.X
-    local newY = input.Position.Y - dragOffset.Y
-    radar.Position = UDim2.new(0, newX, 0, newY)
-end
-
-local function startDrag(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or
-       input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        local absPos = radar.AbsolutePosition
-        dragOffset = Vector2.new(input.Position.X - absPos.X, input.Position.Y - absPos.Y)
-    end
-end
-
-dragButton.InputBegan:Connect(startDrag)
-
-local function moveDrag(input)
-    if not dragging then return end
-    if input.UserInputType == Enum.UserInputType.MouseMovement or
-       input.UserInputType == Enum.UserInputType.Touch then
-        updateDrag(input)
-    end
-end
-
-dragButton.InputChanged:Connect(moveDrag)
-
-local function endDrag(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or
-       input.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
-    end
-end
-
-dragButton.InputEnded:Connect(endDrag)
-
--- КЭШ ДРУЗЕЙ
-local friendCache = {}
-local lastFriendUpdate = 0
-
-local function updateFriendCache()
-    local now = tick()
-    if now - lastFriendUpdate < FRIEND_CACHE_TIME then return end
-    lastFriendUpdate = now
-    local newCache = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            if p:IsFriendsWith(LocalPlayer.UserId) then
-                newCache[p.UserId] = true
-            end
-        end
-    end
-    friendCache = newCache
-end
-
--- ОСНОВНОЙ ЦИКЛ
+-- ---- ОСНОВНОЙ ЦИКЛ (обновление радара) ----
 RunService.RenderStepped:Connect(function()
     pcall(function()
         local myHRP = GetHRP(LocalPlayer)
@@ -249,13 +240,27 @@ RunService.RenderStepped:Connect(function()
         -- Поворачиваем стрелку
         local camLook = Camera.CFrame.LookVector
         local angle = math.atan2(camLook.X, -camLook.Z)
-        arrow.Rotation = math.deg(angle)
+        if arrow then
+            arrow.Rotation = math.deg(angle)
+        end
 
-        updateFriendCache()
+        -- Обновляем кэш друзей (раз в FRIEND_CACHE_TIME секунд)
+        local now = tick()
+        if now - lastFriendUpdate >= FRIEND_CACHE_TIME then
+            lastFriendUpdate = now
+            local newCache = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LocalPlayer then
+                    if p:IsFriendsWith(LocalPlayer.UserId) then
+                        newCache[p.UserId] = true
+                    end
+                end
+            end
+            friendCache = newCache
+        end
 
         local halfSize = RADAR_SIZE / 2
         local players = Players:GetPlayers()
-        local visibleCount = 0
 
         for _, player in ipairs(players) do
             if player == LocalPlayer then continue end
@@ -284,7 +289,17 @@ RunService.RenderStepped:Connect(function()
 
             local blip = blips[player]
             if not blip then
-                blip = CreateBlip(color)
+                blip = Instance.new("Frame")
+                blip.Size = UDim2.new(0, BLIP_SIZE, 0, BLIP_SIZE)
+                blip.AnchorPoint = Vector2.new(0.5, 0.5)
+                blip.BackgroundColor3 = color
+                blip.BorderSizePixel = 1
+                blip.BorderColor3 = Color3.fromRGB(255, 255, 255)
+                blip.ZIndex = 3
+                blip.Parent = radar
+                local corner = Instance.new("UICorner")
+                corner.CornerRadius = UDim.new(1, 0)
+                corner.Parent = blip
                 blips[player] = blip
             end
 
@@ -293,7 +308,6 @@ RunService.RenderStepped:Connect(function()
             if blip.BackgroundColor3 ~= color then
                 blip.BackgroundColor3 = color
             end
-            visibleCount = visibleCount + 1
         end
 
         -- Удаляем точки для ушедших игроков
@@ -303,13 +317,7 @@ RunService.RenderStepped:Connect(function()
                 blips[player] = nil
             end
         end
-
-        -- Отладочный вывод (один раз в 5 секунд)
-        if not radar._lastPrint or tick() - radar._lastPrint > 5 then
-            radar._lastPrint = tick()
-            print("[Radar] Players in range: " .. visibleCount)
-        end
     end)
 end)
 
-print("Radar loaded. Circle radar with grid.")
+print("Radar loaded. Use X to close, R to restart.")
