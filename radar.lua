@@ -1,9 +1,9 @@
 --[[
-   КВАДРАТНЫЙ РАДАР С ПОВОРОТОМ ОТ КАМЕРЫ
-   - Чёрный фон, сетка
+   КВАДРАТНЫЙ РАДАР С ПОВОРОТОМ ОТ КАМЕРЫ (БЕЗ КАРТИНОК)
+   - Чёрный фон, яркая сетка
    - Перетаскивание мышкой/пальцем
-   - Друзья — зелёные, враги — красные
-   - Синий треугольник в центре показывает направление взгляда
+   - Друзья — зелёные, враги — красные (маленькие точки)
+   - Синий треугольник из текста в центре показывает направление
    - Дальность 1000 студей
 ]]
 
@@ -24,9 +24,9 @@ end
 destroyOldRadar()
 
 -- НАСТРОЙКИ
-local RADAR_SIZE = 180
+local RADAR_SIZE = 200               -- чуть больше для комфорта
 local MAX_RANGE = 1000
-local BLIP_SIZE = 6
+local BLIP_SIZE = 3                  -- очень маленькие точки
 local FRIEND_CACHE_TIME = 3
 
 -- Переменные для хранения объектов
@@ -47,7 +47,7 @@ local function CreateRadar()
     radar.Position = UDim2.new(1, -(RADAR_SIZE + 20), 0, 20)
     radar.AnchorPoint = Vector2.new(0, 0)
     radar.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    radar.BackgroundTransparency = 0.3
+    radar.BackgroundTransparency = 0.2
     radar.BorderSizePixel = 1
     radar.BorderColor3 = Color3.fromRGB(200, 200, 200)
     radar.ClipsDescendants = true
@@ -62,14 +62,14 @@ local function CreateRadar()
     dragButton.ZIndex = 10
     dragButton.Parent = radar
 
-    -- ---- СЕТКА (линии) ----
+    -- ---- СЕТКА (яркие линии) ----
     local function createLine(rotation, color, sizeX, sizeY, posX, posY)
         local line = Instance.new("Frame")
         line.Size = UDim2.new(sizeX, 0, sizeY, 0)
         line.AnchorPoint = Vector2.new(0.5, 0.5)
         line.Position = UDim2.new(posX, 0, posY, 0)
         line.BackgroundColor3 = color
-        line.BackgroundTransparency = 0.5
+        line.BackgroundTransparency = 0.2   -- почти непрозрачные
         line.BorderSizePixel = 0
         line.Rotation = rotation
         line.ZIndex = 1
@@ -77,28 +77,32 @@ local function CreateRadar()
         return line
     end
 
-    local lineColor = Color3.fromRGB(150, 150, 150)
+    local lineColor = Color3.fromRGB(180, 180, 180)
 
     for y = 0.25, 0.75, 0.25 do
-        createLine(0, lineColor, 0.9, 0.005, 0.5, y)
+        createLine(0, lineColor, 0.9, 0.01, 0.5, y)   -- толщина 0.01
     end
     for x = 0.25, 0.75, 0.25 do
-        createLine(0, lineColor, 0.005, 0.9, x, 0.5)
+        createLine(0, lineColor, 0.01, 0.9, x, 0.5)
     end
 
-    -- ---- СИНИЙ ТРЕУГОЛЬНИК В ЦЕНТРЕ (ВЫ, указывает направление камеры) ----
-    centerArrow = Instance.new("ImageLabel")
-    centerArrow.Size = UDim2.new(0, 12, 0, 12)   -- чуть меньше прежней точки
+    -- ---- СИНИЙ ТРЕУГОЛЬНИК (ТЕКСТ) ----
+    centerArrow = Instance.new("TextLabel")
+    centerArrow.Size = UDim2.new(0, 14, 0, 14)   -- чуть больше для видимости
     centerArrow.AnchorPoint = Vector2.new(0.5, 0.5)
     centerArrow.Position = UDim2.new(0.5, 0, 0.5, 0)
     centerArrow.BackgroundTransparency = 1
-    centerArrow.Image = "rbxassetid://6031094979"   -- треугольник-стрелка
-    centerArrow.ImageColor3 = Color3.fromRGB(0, 150, 255)   -- ярко-синий
+    centerArrow.Text = "▲"                     -- треугольник вверх
+    centerArrow.TextColor3 = Color3.fromRGB(0, 150, 255)
+    centerArrow.TextSize = 14
+    centerArrow.Font = Enum.Font.SourceSansBold
+    centerArrow.TextXAlignment = Enum.TextXAlignment.Center
+    centerArrow.TextYAlignment = Enum.TextYAlignment.Center
     centerArrow.ZIndex = 6
     centerArrow.Parent = radar
     centerArrow.Name = "CenterArrow"
 
-    -- ---- ТЕКСТ ПОД РАДАРОМ (без кнопок) ----
+    -- ---- ТЕКСТ ПОД РАДАРОМ ----
     local label = Instance.new("TextLabel")
     label.Size = UDim2.new(0, RADAR_SIZE, 0, 20)
     label.Position = UDim2.new(0, 0, 1, 5)
@@ -216,7 +220,7 @@ RunService.RenderStepped:Connect(function()
             local dx = targetPos.X - myPos.X
             local dz = targetPos.Z - myPos.Z
 
-            -- Поворачиваем вектор на угол камеры, затем отражаем Z
+            -- Поворачиваем вектор на угол камеры
             local rotX = dx * cosA - dz * sinA
             local rotY = dx * sinA + dz * cosA
             local rx = rotX * scale
@@ -231,10 +235,10 @@ RunService.RenderStepped:Connect(function()
                 blip.Size = UDim2.new(0, BLIP_SIZE, 0, BLIP_SIZE)
                 blip.AnchorPoint = Vector2.new(0.5, 0.5)
                 blip.BackgroundColor3 = color
-                blip.BorderSizePixel = 1
-                blip.BorderColor3 = Color3.fromRGB(255, 255, 255)
+                blip.BorderSizePixel = 0
                 blip.ZIndex = 3
                 blip.Parent = radar
+                -- круглое пятнышко
                 local corner = Instance.new("UICorner")
                 corner.CornerRadius = UDim.new(1, 0)
                 corner.Parent = blip
@@ -258,4 +262,4 @@ RunService.RenderStepped:Connect(function()
     end)
 end)
 
-print("Radar loaded. Rotates with camera, range 1000.")
+print("Radar loaded. Triangle from text, tiny dots, range 1000.")
