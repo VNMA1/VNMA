@@ -1,12 +1,17 @@
 --!nocheck
--- FLING VNMA - ИСПРАВЛЕННАЯ ВЕРСИЯ С ОТЛАДКОЙ
+-- FLING VNMA | MOBILE UI REWORK
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local LocalPlayer = Players.LocalPlayer
 local CoreGui = game:GetService("CoreGui")
-local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
 
 local MY_TG_LINK = "https://t.me/VNMA_OFFICIAL"
+
+----------------------------------------------------------------
+-- GLOBAL STATE
+----------------------------------------------------------------
 
 getgenv().FlingScriptRunning = false
 getgenv().AntiFlingActive = false
@@ -14,348 +19,639 @@ getgenv().FlingLoopActive = false
 getgenv().SelectedPlayers = {}
 getgenv().AntiFlingConnection = nil
 getgenv().FlingLoopThread = nil
+getgenv().RefreshThread = nil
 getgenv().IsMenuHidden = false
+getgenv().Connections = getgenv().Connections or {}
+getgenv().AntiFlingOriginal = getgenv().AntiFlingOriginal or {}
 
-local function CleanupExisting()
-    getgenv().FlingScriptRunning = false
-    task.wait(0.1)
-    if getgenv().AntiFlingConnection then
-        pcall(function() getgenv().AntiFlingConnection:Disconnect() end)
-        getgenv().AntiFlingConnection = nil
+----------------------------------------------------------------
+-- HELPERS
+----------------------------------------------------------------
+
+local function disconnectConnection(key)
+    local conn = getgenv().Connections[key]
+    if conn then
+        pcall(function()
+            conn:Disconnect()
+        end)
+        getgenv().Connections[key] = nil
     end
-    local gui = CoreGui:FindFirstChild("FlingGui_QueueSystem")
-    if gui then
-        pcall(function() gui:Destroy() end)
-    end
-    local char = LocalPlayer.Character
-    if char then
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp then
+end
+
+local function disconnectAll()
+    for key, conn in pairs(getgenv().Connections) do
+        if conn then
             pcall(function()
-                if hrp:FindFirstChild("FlingLV") then hrp.FlingLV:Destroy() end
-                if hrp:FindFirstChild("FlingAV") then hrp.FlingAV:Destroy() end
-                if hrp:FindFirstChild("FlingAttachment") then hrp.FlingAttachment:Destroy() end
-                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+                conn:Disconnect()
+            end)
+        end
+        getgenv().Connections[key] = nil
+    end
+end
+
+local function restoreAntiFling()
+    local original = getgenv().AntiFlingOriginal
+
+    for part, oldCanCollide in pairs(original) do
+        if part and part.Parent then
+            pcall(function()
+                part.CanCollide = oldCanCollide
             end)
         end
     end
-    getgenv().SelectedPlayers = {}
-    getgenv().FlingLoopActive = false
-    getgenv().AntiFlingActive = false
-    getgenv().IsMenuHidden = false
+
+    table.clear(original)
 end
-
-CleanupExisting()
-getgenv().FlingScriptRunning = true
-
-local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "FlingGui_QueueSystem"
-ScreenGui.Parent = CoreGui
-ScreenGui.ResetOnSpawn = false
-
-local MainFrame = Instance.new("Frame")
-MainFrame.Parent = ScreenGui
-MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
-MainFrame.Position = UDim2.new(0.1, 0, 0.05, 0)
-MainFrame.Size = UDim2.new(0, 220, 0, 400)
-MainFrame.Active = true
-MainFrame.Draggable = true
-MainFrame.ClipsDescendants = true
-
--- КРАСНАЯ КНОПКА ЗАКРЫТИЯ
-local CloseBtn = Instance.new("TextButton")
-CloseBtn.Parent = MainFrame
-CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-CloseBtn.BackgroundTransparency = 0
-CloseBtn.Position = UDim2.new(0.92, 0, 0.005, 0)
-CloseBtn.Size = UDim2.new(0, 20, 0, 20)
-CloseBtn.Font = Enum.Font.SourceSansBold
-CloseBtn.Text = "✕"
-CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-CloseBtn.TextSize = 14
-CloseBtn.ZIndex = 10
-CloseBtn.BorderSizePixel = 1
-CloseBtn.BorderColor3 = Color3.fromRGB(150, 0, 0)
-
-CloseBtn.MouseEnter:Connect(function()
-    CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-end)
-CloseBtn.MouseLeave:Connect(function()
-    CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-end)
-
-CloseBtn.MouseButton1Click:Connect(function()
-    MainFrame.Visible = false
-    getgenv().IsMenuHidden = true
-    ShowBtn.Visible = true
-end)
-
-local Title = Instance.new("TextLabel")
-Title.Parent = MainFrame
-Title.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-Title.Size = UDim2.new(1, 0, 0, 30)
-Title.Font = Enum.Font.SourceSansBold
-Title.Text = "FLING VNMA"
-Title.TextColor3 = Color3.fromRGB(255, 255, 255)
-Title.TextSize = 12
-
-local TgLabel = Instance.new("TextLabel")
-TgLabel.Parent = MainFrame
-TgLabel.BackgroundTransparency = 1
-TgLabel.Position = UDim2.new(0, 0, 0, 30)
-TgLabel.Size = UDim2.new(1, 0, 0, 20)
-TgLabel.Font = Enum.Font.Code
-TgLabel.Text = MY_TG_LINK
-TgLabel.TextColor3 = Color3.fromRGB(0, 255, 255)
-TgLabel.TextSize = 10
-
-task.spawn(function()
-    local hue = 0
-    while getgenv().FlingScriptRunning and task.wait(0.02) do
-        hue = (hue + 1) % 360
-        if TgLabel and TgLabel.Parent then
-            TgLabel.TextColor3 = Color3.fromHSV(hue / 360, 0.8, 1)
-        end
-    end
-end)
-
-local ContentContainer = Instance.new("Frame")
-ContentContainer.Parent = MainFrame
-ContentContainer.BackgroundTransparency = 1
-ContentContainer.Position = UDim2.new(0, 0, 0, 50)
-ContentContainer.Size = UDim2.new(1, 0, 1, -50)
-
-local AntiFlingBtn = Instance.new("TextButton")
-AntiFlingBtn.Parent = ContentContainer
-AntiFlingBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-AntiFlingBtn.Position = UDim2.new(0.05, 0, 0.02, 0)
-AntiFlingBtn.Size = UDim2.new(0.9, 0, 0, 25)
-AntiFlingBtn.Font = Enum.Font.SourceSansBold
-AntiFlingBtn.Text = "🛡️ Анти-Флинг: ВЫКЛ"
-AntiFlingBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-AntiFlingBtn.TextSize = 11
-
-local StartFlingBtn = Instance.new("TextButton")
-StartFlingBtn.Parent = ContentContainer
-StartFlingBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 200)
-StartFlingBtn.Position = UDim2.new(0.05, 0, 0.12, 0)
-StartFlingBtn.Size = UDim2.new(0.9, 0, 0, 30)
-StartFlingBtn.Font = Enum.Font.SourceSansBold
-StartFlingBtn.Text = "⚔️ ЗАПУСТИТЬ ФЛИНГ"
-StartFlingBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-StartFlingBtn.TextSize = 12
-
-local ResetBtn = Instance.new("TextButton")
-ResetBtn.Parent = ContentContainer
-ResetBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
-ResetBtn.Position = UDim2.new(0.05, 0, 0.20, 0)
-ResetBtn.Size = UDim2.new(0.9, 0, 0, 20)
-ResetBtn.Font = Enum.Font.SourceSans
-ResetBtn.Text = "🧹 Сбросить цели"
-ResetBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-ResetBtn.TextSize = 10
-
-local PlayersScroll = Instance.new("ScrollingFrame")
-PlayersScroll.Parent = ContentContainer
-PlayersScroll.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-PlayersScroll.Position = UDim2.new(0.05, 0, 0.26, 0)
-PlayersScroll.Size = UDim2.new(0.9, 0, 0, 0.45)
-PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-PlayersScroll.ScrollBarThickness = 4
-
-local ReloadBtn = Instance.new("TextButton")
-ReloadBtn.Parent = ContentContainer
-ReloadBtn.BackgroundColor3 = Color3.fromRGB(210, 105, 30)
-ReloadBtn.Position = UDim2.new(0.05, 0, 0.75, 0)
-ReloadBtn.Size = UDim2.new(0.9, 0, 0, 22)
-ReloadBtn.Font = Enum.Font.SourceSansBold
-ReloadBtn.Text = "🔄 ПЕРЕЗАГРУЗИТЬ"
-ReloadBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-ReloadBtn.TextSize = 10
-
-local HideBtn = Instance.new("TextButton")
-HideBtn.Parent = ContentContainer
-HideBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)
-HideBtn.Position = UDim2.new(0.05, 0, 0.85, 0)
-HideBtn.Size = UDim2.new(0.42, 0, 0, 20)
-HideBtn.Font = Enum.Font.SourceSans
-HideBtn.Text = "👁️ Скрыть"
-HideBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-HideBtn.TextSize = 10
-
-local ShowBtn = Instance.new("TextButton")
-ShowBtn.Parent = ScreenGui
-ShowBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
-ShowBtn.Position = UDim2.new(0.42, 0, 0.85, 0)
-ShowBtn.Size = UDim2.new(0, 55, 0, 55)
-ShowBtn.Font = Enum.Font.SourceSansBold
-ShowBtn.Text = "⚡\nVNMA"
-ShowBtn.TextColor3 = Color3.fromRGB(255, 215, 0)
-ShowBtn.TextSize = 12
-ShowBtn.Visible = false
-ShowBtn.ZIndex = 20
-ShowBtn.BorderSizePixel = 2
-ShowBtn.BorderColor3 = Color3.fromRGB(255, 215, 0)
-
-local UIListLayout = Instance.new("UIListLayout")
-UIListLayout.Parent = PlayersScroll
-UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-UIListLayout.Padding = UDim.new(0, 3)
-
-local function ToggleHide()
-    getgenv().IsMenuHidden = not getgenv().IsMenuHidden
-    if getgenv().IsMenuHidden then
-        MainFrame.Visible = false
-        ShowBtn.Visible = true
-        HideBtn.Text = "👁️ Показать"
-    else
-        MainFrame.Visible = true
-        ShowBtn.Visible = false
-        HideBtn.Text = "👁️ Скрыть"
-    end
-end
-
-HideBtn.MouseButton1Click:Connect(ToggleHide)
-
-ShowBtn.MouseButton1Click:Connect(function()
-    getgenv().IsMenuHidden = false
-    MainFrame.Visible = true
-    ShowBtn.Visible = false
-    HideBtn.Text = "👁️ Скрыть"
-end)
 
 local function removeFlingVelocity(hrp)
-    if not hrp or not hrp.Parent then return end
+    if not hrp or not hrp.Parent then
+        return
+    end
+
     pcall(function()
-        if hrp:FindFirstChild("FlingLV") then hrp.FlingLV:Destroy() end
-        if hrp:FindFirstChild("FlingAV") then hrp.FlingAV:Destroy() end
-        if hrp:FindFirstChild("FlingAttachment") then hrp.FlingAttachment:Destroy() end
-        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-        hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
+        local lv = hrp:FindFirstChild("FlingLV")
+        if lv then
+            lv:Destroy()
+        end
+
+        local av = hrp:FindFirstChild("FlingAV")
+        if av then
+            av:Destroy()
+        end
+
+        local att = hrp:FindFirstChild("FlingAttachment")
+        if att then
+            att:Destroy()
+        end
+
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
     end)
 end
 
 local function applyFlingVelocity(hrp)
-    if not hrp or not hrp.Parent then return end
+    if not hrp or not hrp.Parent then
+        return
+    end
+
     pcall(function()
-        local att = hrp:FindFirstChild("FlingAttachment") 
+        local att = hrp:FindFirstChild("FlingAttachment")
+
         if not att then
             att = Instance.new("Attachment")
             att.Name = "FlingAttachment"
             att.Parent = hrp
         end
+
         local lv = hrp:FindFirstChild("FlingLV")
+
         if not lv then
             lv = Instance.new("LinearVelocity")
             lv.Name = "FlingLV"
             lv.Parent = hrp
         end
-        lv.MaxForce = math.huge
-        lv.VectorVelocity = Vector3.new(999999, 999999, 999999)
+
         lv.Attachment0 = att
+        lv.RelativeTo = Enum.ActuatorRelativeTo.World
+        lv.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+        lv.ForceLimitsEnabled = false
+        lv.VectorVelocity = Vector3.new(999999, 999999, 999999)
+
         local av = hrp:FindFirstChild("FlingAV")
+
         if not av then
             av = Instance.new("AngularVelocity")
             av.Name = "FlingAV"
             av.Parent = hrp
         end
+
+        av.Attachment0 = att
+        av.RelativeTo = Enum.ActuatorRelativeTo.World
         av.MaxTorque = math.huge
         av.AngularVelocity = Vector3.new(999999, 999999, 999999)
-        av.Attachment0 = att
     end)
 end
 
-getgenv().AntiFlingConnection = RunService.Heartbeat:Connect(function()
-    if not getgenv().FlingScriptRunning then 
-        if getgenv().AntiFlingConnection then
-            getgenv().AntiFlingConnection:Disconnect()
-            getgenv().AntiFlingConnection = nil
-        end
-        return 
-    end
-    if getgenv().AntiFlingActive then
+----------------------------------------------------------------
+-- CLEANUP
+----------------------------------------------------------------
+
+local function CleanupExisting()
+    getgenv().FlingScriptRunning = false
+    getgenv().FlingLoopActive = false
+    getgenv().AntiFlingActive = false
+
+    disconnectAll()
+
+    if getgenv().AntiFlingConnection then
         pcall(function()
-            for _, p in pairs(Players:GetPlayers()) do
-                if p ~= LocalPlayer and p.Character and p.Character.Parent then
-                    for _, part in pairs(p.Character:GetDescendants()) do
-                        if part:IsA("BasePart") and part.CanCollide then 
-                            part.CanCollide = false 
+            getgenv().AntiFlingConnection:Disconnect()
+        end)
+        getgenv().AntiFlingConnection = nil
+    end
+
+    restoreAntiFling()
+
+    local oldGui = CoreGui:FindFirstChild("FlingGui_QueueSystem")
+
+    if oldGui then
+        pcall(function()
+            oldGui:Destroy()
+        end)
+    end
+
+    local char = LocalPlayer.Character
+
+    if char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            removeFlingVelocity(hrp)
+        end
+
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            pcall(function()
+                humanoid.Sit = false
+            end)
+        end
+    end
+
+    getgenv().SelectedPlayers = {}
+    getgenv().IsMenuHidden = false
+end
+
+CleanupExisting()
+
+getgenv().FlingScriptRunning = true
+
+----------------------------------------------------------------
+-- GUI
+----------------------------------------------------------------
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "FlingGui_QueueSystem"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = CoreGui
+
+----------------------------------------------------------------
+-- BACKGROUND
+----------------------------------------------------------------
+
+local Backdrop = Instance.new("Frame")
+Backdrop.Parent = ScreenGui
+Backdrop.Size = UDim2.fromScale(1, 1)
+Backdrop.BackgroundColor3 = Color3.fromRGB(5, 7, 10)
+Backdrop.BackgroundTransparency = 0.15
+Backdrop.BorderSizePixel = 0
+
+----------------------------------------------------------------
+-- MAIN
+----------------------------------------------------------------
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Parent = ScreenGui
+MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+MainFrame.Position = UDim2.fromScale(0.5, 0.5)
+MainFrame.Size = UDim2.fromScale(0.94, 0.92)
+MainFrame.BackgroundColor3 = Color3.fromRGB(18, 21, 28)
+MainFrame.BorderSizePixel = 0
+MainFrame.ClipsDescendants = true
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 18)
+MainCorner.Parent = MainFrame
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(55, 65, 85)
+MainStroke.Thickness = 1.5
+MainStroke.Transparency = 0.15
+MainStroke.Parent = MainFrame
+
+----------------------------------------------------------------
+-- HEADER
+----------------------------------------------------------------
+
+local Header = Instance.new("Frame")
+Header.Parent = MainFrame
+Header.Size = UDim2.new(1, 0, 0, 82)
+Header.BackgroundColor3 = Color3.fromRGB(24, 28, 38)
+Header.BorderSizePixel = 0
+
+local HeaderTitle = Instance.new("TextLabel")
+HeaderTitle.Parent = Header
+HeaderTitle.BackgroundTransparency = 1
+HeaderTitle.Position = UDim2.new(0, 22, 0, 10)
+HeaderTitle.Size = UDim2.new(1, -95, 0, 34)
+HeaderTitle.Font = Enum.Font.GothamBold
+HeaderTitle.Text = "⚡ FLING VNMA"
+HeaderTitle.TextColor3 = Color3.fromRGB(245, 248, 255)
+HeaderTitle.TextSize = 22
+HeaderTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+local HeaderSub = Instance.new("TextLabel")
+HeaderSub.Parent = Header
+HeaderSub.BackgroundTransparency = 1
+HeaderSub.Position = UDim2.new(0, 23, 0, 46)
+HeaderSub.Size = UDim2.new(1, -100, 0, 24)
+HeaderSub.Font = Enum.Font.Code
+HeaderSub.Text = MY_TG_LINK
+HeaderSub.TextColor3 = Color3.fromRGB(90, 220, 255)
+HeaderSub.TextSize = 12
+HeaderSub.TextXAlignment = Enum.TextXAlignment.Left
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Parent = Header
+CloseBtn.AnchorPoint = Vector2.new(1, 0.5)
+CloseBtn.Position = UDim2.new(1, -14, 0.5, 0)
+CloseBtn.Size = UDim2.new(0, 48, 0, 48)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(175, 50, 55)
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Text = "×"
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.TextSize = 28
+CloseBtn.AutoButtonColor = true
+
+local CloseCorner = Instance.new("UICorner")
+CloseCorner.CornerRadius = UDim.new(0, 14)
+CloseCorner.Parent = CloseBtn
+
+----------------------------------------------------------------
+-- CONTENT
+----------------------------------------------------------------
+
+local Content = Instance.new("Frame")
+Content.Parent = MainFrame
+Content.BackgroundTransparency = 1
+Content.Position = UDim2.new(0, 14, 0, 92)
+Content.Size = UDim2.new(1, -28, 1, -106)
+
+----------------------------------------------------------------
+-- BUTTON FACTORY
+----------------------------------------------------------------
+
+local function createButton(parent, text, height)
+    local btn = Instance.new("TextButton")
+    btn.Parent = parent
+    btn.Size = UDim2.new(1, 0, 0, height)
+    btn.BackgroundColor3 = Color3.fromRGB(35, 40, 52)
+    btn.BorderSizePixel = 0
+    btn.Font = Enum.Font.GothamBold
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(245, 245, 245)
+    btn.TextSize = 15
+    btn.AutoButtonColor = true
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = btn
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(65, 75, 95)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.2
+    stroke.Parent = btn
+
+    return btn
+end
+
+----------------------------------------------------------------
+-- TOP BUTTONS
+----------------------------------------------------------------
+
+local AntiFlingBtn = createButton(Content, "🛡️  Анти-Флинг: ВЫКЛ", 48)
+AntiFlingBtn.BackgroundColor3 = Color3.fromRGB(120, 50, 55)
+
+local StartFlingBtn = createButton(Content, "⚔️  ЗАПУСТИТЬ ФЛИНГ", 54)
+StartFlingBtn.BackgroundColor3 = Color3.fromRGB(45, 100, 195)
+
+local ResetBtn = createButton(Content, "🧹  Сбросить цели", 42)
+ResetBtn.BackgroundColor3 = Color3.fromRGB(40, 45, 58)
+
+----------------------------------------------------------------
+-- TARGET TITLE
+----------------------------------------------------------------
+
+local TargetTitle = Instance.new("TextLabel")
+TargetTitle.Parent = Content
+TargetTitle.BackgroundTransparency = 1
+TargetTitle.Position = UDim2.new(0, 4, 0, 160)
+TargetTitle.Size = UDim2.new(1, -8, 0, 30)
+TargetTitle.Font = Enum.Font.GothamBold
+TargetTitle.Text = "ИГРОКИ НА СЕРВЕРЕ"
+TargetTitle.TextColor3 = Color3.fromRGB(210, 215, 230)
+TargetTitle.TextSize = 15
+TargetTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+local CountLabel = Instance.new("TextLabel")
+CountLabel.Parent = Content
+CountLabel.BackgroundTransparency = 1
+CountLabel.Position = UDim2.new(1, -160, 0, 160)
+CountLabel.Size = UDim2.new(0, 156, 0, 30)
+CountLabel.Font = Enum.Font.Gotham
+CountLabel.Text = "Целей: 0"
+CountLabel.TextColor3 = Color3.fromRGB(130, 180, 255)
+CountLabel.TextSize = 13
+CountLabel.TextXAlignment = Enum.TextXAlignment.Right
+
+----------------------------------------------------------------
+-- PLAYER LIST
+----------------------------------------------------------------
+
+local PlayersScroll = Instance.new("ScrollingFrame")
+PlayersScroll.Parent = Content
+PlayersScroll.Position = UDim2.new(0, 0, 0, 196)
+PlayersScroll.Size = UDim2.new(1, 0, 1, -268)
+PlayersScroll.BackgroundColor3 = Color3.fromRGB(11, 14, 20)
+PlayersScroll.BorderSizePixel = 0
+PlayersScroll.ScrollBarThickness = 7
+PlayersScroll.ScrollBarImageTransparency = 0.15
+PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+PlayersScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+PlayersScroll.ScrollingDirection = Enum.ScrollingDirection.Y
+
+local ScrollCorner = Instance.new("UICorner")
+ScrollCorner.CornerRadius = UDim.new(0, 14)
+ScrollCorner.Parent = PlayersScroll
+
+local ScrollPadding = Instance.new("UIPadding")
+ScrollPadding.Parent = PlayersScroll
+ScrollPadding.PaddingTop = UDim.new(0, 8)
+ScrollPadding.PaddingBottom = UDim.new(0, 8)
+ScrollPadding.PaddingLeft = UDim.new(0, 8)
+ScrollPadding.PaddingRight = UDim.new(0, 8)
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Parent = PlayersScroll
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Padding = UDim.new(0, 7)
+
+----------------------------------------------------------------
+-- BOTTOM BUTTONS
+----------------------------------------------------------------
+
+local ReloadBtn = createButton(Content, "🔄  Перезагрузить список", 42)
+ReloadBtn.Position = UDim2.new(0, 0, 1, -62)
+
+local HideBtn = createButton(Content, "👁️  Скрыть меню", 42)
+HideBtn.Position = UDim2.new(0.5, 5, 1, -62)
+HideBtn.Size = UDim2.new(0.5, -5, 0, 42)
+
+ReloadBtn.Size = UDim2.new(0.5, -5, 0, 42)
+
+----------------------------------------------------------------
+-- SHOW BUTTON
+----------------------------------------------------------------
+
+local ShowBtn = Instance.new("TextButton")
+ShowBtn.Parent = ScreenGui
+ShowBtn.AnchorPoint = Vector2.new(1, 1)
+ShowBtn.Position = UDim2.new(1, -16, 1, -16)
+ShowBtn.Size = UDim2.new(0, 68, 0, 68)
+ShowBtn.BackgroundColor3 = Color3.fromRGB(24, 28, 38)
+ShowBtn.BorderSizePixel = 0
+ShowBtn.Font = Enum.Font.GothamBold
+ShowBtn.Text = "⚡\nVNMA"
+ShowBtn.TextColor3 = Color3.fromRGB(255, 215, 80)
+ShowBtn.TextSize = 16
+ShowBtn.Visible = false
+ShowBtn.ZIndex = 50
+
+local ShowCorner = Instance.new("UICorner")
+ShowCorner.CornerRadius = UDim.new(0, 18)
+ShowCorner.Parent = ShowBtn
+
+local ShowStroke = Instance.new("UIStroke")
+ShowStroke.Color = Color3.fromRGB(255, 210, 70)
+ShowStroke.Thickness = 2
+ShowStroke.Parent = ShowBtn
+
+----------------------------------------------------------------
+-- MOBILE DRAG
+----------------------------------------------------------------
+
+local function makeDraggable(frame)
+    local dragging = false
+    local dragStart
+    local startPos
+
+    local function update(input)
+        local delta = input.Position - dragStart
+
+        frame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    frame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch then
+
+            if dragging then
+                update(input)
+            end
+        end
+    end)
+end
+
+makeDraggable(MainFrame)
+
+----------------------------------------------------------------
+-- HIDE / SHOW
+----------------------------------------------------------------
+
+local function setHidden(hidden)
+    getgenv().IsMenuHidden = hidden
+
+    MainFrame.Visible = not hidden
+    Backdrop.Visible = not hidden
+    ShowBtn.Visible = hidden
+
+    if hidden then
+        HideBtn.Text = "👁️  Показать меню"
+    else
+        HideBtn.Text = "👁️  Скрыть меню"
+    end
+end
+
+CloseBtn.MouseButton1Click:Connect(function()
+    setHidden(true)
+end)
+
+HideBtn.MouseButton1Click:Connect(function()
+    setHidden(not getgenv().IsMenuHidden)
+end)
+
+ShowBtn.MouseButton1Click:Connect(function()
+    setHidden(false)
+end)
+
+----------------------------------------------------------------
+-- ANTI-FLING
+----------------------------------------------------------------
+
+getgenv().AntiFlingConnection = RunService.Heartbeat:Connect(function()
+    if not getgenv().FlingScriptRunning then
+        return
+    end
+
+    if not getgenv().AntiFlingActive then
+        return
+    end
+
+    pcall(function()
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer
+            and player.Character
+            and player.Character.Parent then
+
+                for _, part in ipairs(player.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        if getgenv().AntiFlingOriginal[part] == nil then
+                            getgenv().AntiFlingOriginal[part] = part.CanCollide
+                        end
+
+                        if part.CanCollide then
+                            part.CanCollide = false
                         end
                     end
                 end
             end
-        end)
-    end
+        end
+    end)
 end)
 
 AntiFlingBtn.MouseButton1Click:Connect(function()
     getgenv().AntiFlingActive = not getgenv().AntiFlingActive
+
     if getgenv().AntiFlingActive then
-        AntiFlingBtn.BackgroundColor3 = Color3.fromRGB(60, 180, 60)
-        AntiFlingBtn.Text = "🛡️ Анти-Флинг: ВКЛ"
+        AntiFlingBtn.BackgroundColor3 = Color3.fromRGB(50, 155, 80)
+        AntiFlingBtn.Text = "🛡️  Анти-Флинг: ВКЛ"
     else
-        AntiFlingBtn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-        AntiFlingBtn.Text = "🛡️ Анти-Флинг: ВЫКЛ"
+        AntiFlingBtn.BackgroundColor3 = Color3.fromRGB(120, 50, 55)
+        AntiFlingBtn.Text = "🛡️  Анти-Флинг: ВЫКЛ"
+
+        restoreAntiFling()
     end
 end)
+
+----------------------------------------------------------------
+-- FLING LOOP
+----------------------------------------------------------------
 
 getgenv().FlingLoopThread = task.spawn(function()
     while getgenv().FlingScriptRunning do
         task.wait(0.1)
+
         if not getgenv().FlingLoopActive then
-            task.wait(0.5)
             continue
         end
-        local targetCount = 0
+
         local selected = getgenv().SelectedPlayers or {}
-        for _, isActive in pairs(selected) do
-            if isActive then targetCount = targetCount + 1 end
-        end
-        if targetCount == 0 then
-            getgenv().FlingLoopActive = false
-            if StartFlingBtn then
-                StartFlingBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 200)
-                StartFlingBtn.Text = "⚔️ ЗАПУСТИТЬ ФЛИНГ"
+        local targetCount = 0
+
+        for _, enabled in pairs(selected) do
+            if enabled then
+                targetCount += 1
             end
+        end
+
+        if targetCount <= 0 then
+            getgenv().FlingLoopActive = false
+            StartFlingBtn.BackgroundColor3 = Color3.fromRGB(45, 100, 195)
+            StartFlingBtn.Text = "⚔️  ЗАПУСТИТЬ ФЛИНГ"
             continue
         end
-        for targetPlayer, isActive in pairs(selected) do
-            if not getgenv().FlingLoopActive or not getgenv().FlingScriptRunning then 
-                break 
+
+        for targetPlayer, enabled in pairs(selected) do
+            if not getgenv().FlingLoopActive
+            or not getgenv().FlingScriptRunning then
+                break
             end
-            if not isActive or not targetPlayer or not targetPlayer.Parent then
+
+            if not enabled
+            or not targetPlayer
+            or not targetPlayer.Parent then
                 continue
             end
+
             pcall(function()
                 local targetChar = targetPlayer.Character
-                if not targetChar or not targetChar.Parent then return end
+                if not targetChar or not targetChar.Parent then
+                    return
+                end
+
                 local targetHRP = targetChar:FindFirstChild("HumanoidRootPart")
-                if not targetHRP or not targetHRP.Parent then return end
+                if not targetHRP then
+                    return
+                end
+
                 local myChar = LocalPlayer.Character
-                if not myChar or not myChar.Parent then return end
+                if not myChar or not myChar.Parent then
+                    return
+                end
+
                 local myHRP = myChar:FindFirstChild("HumanoidRootPart")
-                if not myHRP or not myHRP.Parent then return end
                 local myHumanoid = myChar:FindFirstChildOfClass("Humanoid")
-                if not myHumanoid or myHumanoid.Health <= 0 then return end
+
+                if not myHRP or not myHumanoid then
+                    return
+                end
+
+                if myHumanoid.Health <= 0 then
+                    return
+                end
+
                 myHumanoid.Sit = true
                 applyFlingVelocity(myHRP)
-                local duration = 0
-                while duration < 0.4 and getgenv().FlingLoopActive and targetPlayer.Parent and targetPlayer.Character and myHumanoid.Health > 0 do
-                    if not targetHRP or not targetHRP.Parent or not myHRP or not myHRP.Parent then 
-                        break 
+
+                local elapsed = 0
+
+                while elapsed < 0.4
+                and getgenv().FlingLoopActive
+                and getgenv().FlingScriptRunning
+                and targetPlayer.Parent
+                and targetPlayer.Character
+                and myHumanoid.Health > 0 do
+
+                    if not targetHRP.Parent or not myHRP.Parent then
+                        break
                     end
-                    pcall(function()
-                        myHRP.CFrame = targetHRP.CFrame * CFrame.new(0, 0, 0.05)
-                    end)
+
+                    myHRP.CFrame = targetHRP.CFrame * CFrame.new(0, 0, 0.05)
+
                     task.wait(0.02)
-                    duration = duration + 0.02
+                    elapsed += 0.02
                 end
+
                 removeFlingVelocity(myHRP)
-                if myHumanoid then 
-                    myHumanoid.Sit = false 
+
+                if myHumanoid.Parent then
+                    myHumanoid.Sit = false
                 end
-                task.wait(3.0)
+
+                task.wait(3)
             end)
         end
     end
@@ -363,153 +659,188 @@ end)
 
 StartFlingBtn.MouseButton1Click:Connect(function()
     getgenv().FlingLoopActive = not getgenv().FlingLoopActive
-    if getgenv().FlingLoopActive then
-        StartFlingBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-        StartFlingBtn.Text = "🛑 ОСТАНОВИТЬ"
-    else
-        StartFlingBtn.BackgroundColor3 = Color3.fromRGB(40, 100, 200)
-        StartFlingBtn.Text = "⚔️ ЗАПУСТИТЬ ФЛИНГ"
-        local myChar = LocalPlayer.Character
-        if myChar then
-            local myHRP = myChar:FindFirstChild("HumanoidRootPart")
-            removeFlingVelocity(myHRP)
-        end
-    end
-end)
 
--- ===== НОВАЯ ФУНКЦИЯ ОБНОВЛЕНИЯ СПИСКА (С ОТЛАДКОЙ) =====
-local function updateList()
-    if not getgenv().FlingScriptRunning then 
-        print("⚠️ Скрипт остановлен, список не обновляется")
-        return 
-    end
-    
-    if not PlayersScroll then
-        print("❌ PlayersScroll не найден!")
-        return
-    end
-    
-    pcall(function()
-        -- Очищаем старые кнопки
-        local childrenToRemove = {}
-        for _, child in pairs(PlayersScroll:GetChildren()) do
-            if child:IsA("TextButton") or child:IsA("TextLabel") then
-                table.insert(childrenToRemove, child)
-            end
-        end
-        for _, child in pairs(childrenToRemove) do
-            child:Destroy()
-        end
-        
-        local selected = getgenv().SelectedPlayers or {}
-        local players = Players:GetPlayers()
-        local count = 0
-        
-        print("📋 Найдено игроков на сервере: " .. #players)
-        
-        -- Создаём кнопки для каждого игрока
-        for _, p in pairs(players) do
-            if p ~= LocalPlayer and p.Parent then
-                count = count + 1
-                print("✅ Добавлен игрок: " .. p.Name .. " (" .. p.DisplayName .. ")")
-                
-                local PBtn = Instance.new("TextButton")
-                PBtn.Name = p.Name
-                PBtn.Size = UDim2.new(1, 0, 0, 22)
-                PBtn.Font = Enum.Font.SourceSans
-                PBtn.TextSize = 11
-                PBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-                PBtn.Parent = PlayersScroll
-                PBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
-                PBtn.BorderSizePixel = 1
-                PBtn.BorderColor3 = Color3.fromRGB(50, 50, 50)
-                
-                if selected[p] then
-                    PBtn.BackgroundColor3 = Color3.fromRGB(45, 140, 45)
-                    PBtn.Text = "🎯 " .. p.DisplayName
-                else
-                    PBtn.Text = p.DisplayName
-                end
-                
-                PBtn.MouseButton1Click:Connect(function()
-                    if p and p.Parent then
-                        local sel = getgenv().SelectedPlayers
-                        if sel[p] then
-                            sel[p] = nil
-                            print("❌ Удалён из целей: " .. p.Name)
-                        else
-                            sel[p] = true
-                            print("✅ Добавлен в цели: " .. p.Name)
-                        end
-                        updateList()
-                    end
+    if getgenv().FlingLoopActive then
+        StartFlingBtn.BackgroundColor3 = Color3.fromRGB(175, 50, 55)
+        StartFlingBtn.Text = "🛑  ОСТАНОВИТЬ"
+    else
+        StartFlingBtn.BackgroundColor3 = Color3.fromRGB(45, 100, 195)
+        StartFlingBtn.Text = "⚔️  ЗАПУСТИТЬ ФЛИНГ"
+
+        local char = LocalPlayer.Character
+        if char then
+            removeFlingVelocity(char:FindFirstChild("HumanoidRootPart"))
+
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                pcall(function()
+                    hum.Sit = false
                 end)
             end
         end
-        
-        -- Обновляем размер списка
-        local canvasHeight = math.max(count * 25 + 10, 50)
-        PlayersScroll.CanvasSize = UDim2.new(0, 0, 0, canvasHeight)
-        
-        -- Если игроков нет, показываем сообщение
-        if count == 0 then
-            print("⚠️ Нет других игроков на сервере!")
-            local emptyLabel = Instance.new("TextLabel")
-            emptyLabel.Parent = PlayersScroll
-            emptyLabel.Size = UDim2.new(1, 0, 0, 30)
-            emptyLabel.BackgroundTransparency = 1
-            emptyLabel.Text = "❌ Нет других игроков"
-            emptyLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
-            emptyLabel.TextSize = 12
-            emptyLabel.Font = Enum.Font.SourceSans
-        else
-            print("✅ Список обновлён! Всего игроков: " .. count)
+    end
+end)
+
+----------------------------------------------------------------
+-- PLAYER LIST
+----------------------------------------------------------------
+
+local updating = false
+
+local function updateList()
+    if not getgenv().FlingScriptRunning or updating then
+        return
+    end
+
+    updating = true
+
+    pcall(function()
+        for _, child in ipairs(PlayersScroll:GetChildren()) do
+            if child:IsA("TextButton") then
+                child:Destroy()
+            end
+        end
+
+        local players = Players:GetPlayers()
+        local selected = getgenv().SelectedPlayers or {}
+
+        local totalPlayers = 0
+        local selectedCount = 0
+
+        for player, enabled in pairs(selected) do
+            if enabled and player and player.Parent then
+                selectedCount += 1
+            end
+        end
+
+        for _, player in ipairs(players) do
+            if player ~= LocalPlayer and player.Parent then
+                totalPlayers += 1
+
+                local row = Instance.new("TextButton")
+                row.Parent = PlayersScroll
+                row.Name = "Player_" .. player.Name
+                row.Size = UDim2.new(1, 0, 0, 46)
+                row.BackgroundColor3 =
+                    selected[player]
+                    and Color3.fromRGB(45, 135, 70)
+                    or Color3.fromRGB(25, 30, 40)
+
+                row.BorderSizePixel = 0
+                row.Font = Enum.Font.GothamMedium
+                row.Text = selected[player]
+                    and "🎯  " .. player.DisplayName
+                    or "   " .. player.DisplayName
+                row.TextColor3 = Color3.fromRGB(245, 245, 245)
+                row.TextSize = 15
+                row.TextXAlignment = Enum.TextXAlignment.Left
+                row.AutoButtonColor = true
+
+                local rowCorner = Instance.new("UICorner")
+                rowCorner.CornerRadius = UDim.new(0, 10)
+                rowCorner.Parent = row
+
+                local rowStroke = Instance.new("UIStroke")
+                rowStroke.Color = Color3.fromRGB(60, 70, 90)
+                rowStroke.Thickness = 1
+                rowStroke.Transparency = 0.35
+                rowStroke.Parent = row
+
+                row.MouseButton1Click:Connect(function()
+                    if not player or not player.Parent then
+                        return
+                    end
+
+                    if getgenv().SelectedPlayers[player] then
+                        getgenv().SelectedPlayers[player] = nil
+                    else
+                        getgenv().SelectedPlayers[player] = true
+                    end
+
+                    updateList()
+                end)
+            end
+        end
+
+        CountLabel.Text =
+            "Игроков: " .. totalPlayers ..
+            "  •  Целей: " .. selectedCount
+
+        if totalPlayers == 0 then
+            local empty = Instance.new("TextLabel")
+            empty.Parent = PlayersScroll
+            empty.Size = UDim2.new(1, 0, 0, 50)
+            empty.BackgroundTransparency = 1
+            empty.Text = "На сервере пока нет других игроков"
+            empty.TextColor3 = Color3.fromRGB(160, 165, 180)
+            empty.Font = Enum.Font.Gotham
+            empty.TextSize = 14
         end
     end)
+
+    updating = false
 end
+
+----------------------------------------------------------------
+-- RESET
+----------------------------------------------------------------
 
 ResetBtn.MouseButton1Click:Connect(function()
     getgenv().SelectedPlayers = {}
-    print("🧹 Список целей сброшен")
     updateList()
 end)
+
+----------------------------------------------------------------
+-- RELOAD
+----------------------------------------------------------------
 
 ReloadBtn.MouseButton1Click:Connect(function()
-    print("🔄 Перезагрузка...")
-    CleanupExisting()
-    task.wait(0.5)
-    getgenv().FlingScriptRunning = true
-    updateList()
-    print("✅ Перезагружено!")
-end)
-
-Players.PlayerAdded:Connect(function(p)
-    print("➕ Игрок зашёл: " .. p.Name)
-    task.wait(0.3)
     updateList()
 end)
 
-Players.PlayerRemoving:Connect(function(p)
-    print("➖ Игрок вышел: " .. p.Name)
-    if getgenv().SelectedPlayers then
-        getgenv().SelectedPlayers[p] = nil
-    end
-    task.wait(0.3)
-    updateList()
-end)
+----------------------------------------------------------------
+-- PLAYER CONNECTIONS
+----------------------------------------------------------------
 
--- Обновляем список каждые 3 секунды (гарантия)
-task.spawn(function()
-    while getgenv().FlingScriptRunning do
-        task.wait(3.0)
+getgenv().Connections.PlayerAdded = Players.PlayerAdded:Connect(function()
+    task.wait(0.25)
+
+    if getgenv().FlingScriptRunning then
         updateList()
     end
 end)
 
--- Первое обновление
+getgenv().Connections.PlayerRemoving = Players.PlayerRemoving:Connect(function(player)
+    getgenv().SelectedPlayers[player] = nil
+
+    task.wait(0.15)
+
+    if getgenv().FlingScriptRunning then
+        updateList()
+    end
+end)
+
+----------------------------------------------------------------
+-- PERIODIC REFRESH
+----------------------------------------------------------------
+
+getgenv().RefreshThread = task.spawn(function()
+    while getgenv().FlingScriptRunning do
+        task.wait(3)
+
+        if getgenv().FlingScriptRunning then
+            updateList()
+        end
+    end
+end)
+
+----------------------------------------------------------------
+-- FIRST UPDATE
+----------------------------------------------------------------
+
 task.wait(0.5)
 updateList()
 
-print("✅ FLING VNMA ЗАПУЩЕН!")
-print("📋 Список игроков обновляется каждые 3 секунды")
-print("🔍 Смотри в консоль (F9) для отладки")
+print("✅ FLING VNMA MOBILE запущен")
+print("📱 Mobile UI включён")
+print("📋 Игроки обновляются автоматически")
