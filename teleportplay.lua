@@ -1,158 +1,663 @@
--- [[ СКРИПТ: Телепорт к игроку по нику (MM2 / любая игра) ]]
--- [[ Обходит блокировку друзей, работает на общих серверах ]]
+--!nocheck
+-- VNMA TELEPORT FINDER | MOBILE REWORK
+-- Поиск игрока по Username / DisplayName
+-- Текущий сервер + поиск сервера игрока
+-- Mobile-friendly GUI
+-- Активация / скрытие / повторное открытие
 
--- Создаём GUI
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
-local HttpService = game:GetService("HttpService")
 local UserInputService = game:GetService("UserInputService")
 
-local player = Players.LocalPlayer
+local LocalPlayer = Players.LocalPlayer
 
--- Проверяем, есть ли уже такое окно
-local existingGui = player.PlayerGui:FindFirstChild("TeleportGUI")
-if existingGui then existingGui:Destroy() end
+----------------------------------------------------------------
+-- GLOBAL STATE
+----------------------------------------------------------------
 
--- Создаём ScreenGui
-local gui = Instance.new("ScreenGui")
-gui.Name = "TeleportGUI"
-gui.Parent = player.PlayerGui
+getgenv().TeleportFinderRunning = false
+getgenv().TeleportFinderActive = false
+getgenv().TeleportFinderGui = nil
+getgenv().TeleportFinderConnections = {}
 
--- Фон
-local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 300, 0, 150)
-frame.Position = UDim2.new(0.5, -150, 0.5, -75)
-frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-frame.BackgroundTransparency = 0.8
-frame.BorderSizePixel = 0
-frame.Parent = gui
+----------------------------------------------------------------
+-- CLEAN OLD VERSION
+----------------------------------------------------------------
 
--- Заголовок
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 30)
-title.Position = UDim2.new(0, 0, 0, 0)
-title.Text = "Телепорт к игроку"
-title.TextColor3 = Color3.fromRGB(255, 255, 255)
-title.TextScaled = true
-title.BackgroundTransparency = 1
-title.Font = Enum.Font.GothamBold
-title.Parent = frame
-
--- Поле ввода
-local textBox = Instance.new("TextBox")
-textBox.Size = UDim2.new(0.8, 0, 0, 30)
-textBox.Position = UDim2.new(0.1, 0, 0, 40)
-textBox.PlaceholderText = "Введите ник игрока"
-textBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-textBox.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-textBox.BorderSizePixel = 0
-textBox.Font = Enum.Font.Gotham
-textBox.TextSize = 16
-textBox.Parent = frame
-
--- Кнопка
-local button = Instance.new("TextButton")
-button.Size = UDim2.new(0.6, 0, 0, 35)
-button.Position = UDim2.new(0.2, 0, 0, 85)
-button.Text = "Телепорт"
-button.BackgroundColor3 = Color3.fromRGB(0, 150, 255)
-button.BorderSizePixel = 0
-button.TextColor3 = Color3.fromRGB(255, 255, 255)
-button.Font = Enum.Font.GothamBold
-button.TextSize = 18
-button.Parent = frame
-
--- Закрыть по ESC
-UserInputService.InputBegan:Connect(function(input, processed)
-    if processed then return end
-    if input.KeyCode == Enum.KeyCode.Escape then
-        gui:Destroy()
+pcall(function()
+    for _, connection in pairs(getgenv().TeleportFinderConnections) do
+        if connection then
+            connection:Disconnect()
+        end
     end
 end)
 
--- Функция для запроса к API
-local function getUserIdByUsername(username)
-    local url = "https://api.roblox.com/users/get-by-username?username=" .. username
-    local success, response = pcall(function()
-        return game:GetService("HttpService"):GetAsync(url)
+getgenv().TeleportFinderConnections = {}
+
+local oldGui = nil
+
+pcall(function()
+    oldGui = LocalPlayer
+        :WaitForChild("PlayerGui")
+        :FindFirstChild("VNMA_TeleportFinder")
+end)
+
+if oldGui then
+    pcall(function()
+        oldGui:Destroy()
     end)
-    if success then
-        local data = HttpService:JSONDecode(response)
-        if data and data.Id then
-            return data.Id
+end
+
+getgenv().TeleportFinderRunning = true
+
+----------------------------------------------------------------
+-- GUI
+----------------------------------------------------------------
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "VNMA_TeleportFinder"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+getgenv().TeleportFinderGui = gui
+
+----------------------------------------------------------------
+-- BACKGROUND
+----------------------------------------------------------------
+
+local background = Instance.new("Frame")
+background.Parent = gui
+background.Size = UDim2.fromScale(1, 1)
+background.BackgroundColor3 = Color3.fromRGB(5, 7, 10)
+background.BackgroundTransparency = 0.2
+background.BorderSizePixel = 0
+
+----------------------------------------------------------------
+-- MAIN WINDOW
+----------------------------------------------------------------
+
+local frame = Instance.new("Frame")
+frame.Parent = gui
+frame.AnchorPoint = Vector2.new(0.5, 0.5)
+frame.Position = UDim2.fromScale(0.5, 0.5)
+frame.Size = UDim2.fromScale(0.94, 0.78)
+frame.BackgroundColor3 = Color3.fromRGB(20, 24, 32)
+frame.BorderSizePixel = 0
+frame.ClipsDescendants = true
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 18)
+frameCorner.Parent = frame
+
+local frameStroke = Instance.new("UIStroke")
+frameStroke.Color = Color3.fromRGB(65, 75, 95)
+frameStroke.Thickness = 1.5
+frameStroke.Transparency = 0.15
+frameStroke.Parent = frame
+
+----------------------------------------------------------------
+-- HEADER
+----------------------------------------------------------------
+
+local header = Instance.new("Frame")
+header.Parent = frame
+header.Size = UDim2.new(1, 0, 0, 82)
+header.BackgroundColor3 = Color3.fromRGB(27, 32, 43)
+header.BorderSizePixel = 0
+
+local title = Instance.new("TextLabel")
+title.Parent = header
+title.BackgroundTransparency = 1
+title.Position = UDim2.new(0, 20, 0, 10)
+title.Size = UDim2.new(1, -100, 0, 34)
+title.Font = Enum.Font.GothamBold
+title.Text = "⚡ TELEPORT FINDER"
+title.TextColor3 = Color3.fromRGB(245, 248, 255)
+title.TextSize = 21
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+local subtitle = Instance.new("TextLabel")
+subtitle.Parent = header
+subtitle.BackgroundTransparency = 1
+subtitle.Position = UDim2.new(0, 21, 0, 45)
+subtitle.Size = UDim2.new(1, -100, 0, 22)
+subtitle.Font = Enum.Font.Code
+subtitle.Text = "VNMA"
+subtitle.TextColor3 = Color3.fromRGB(80, 215, 255)
+subtitle.TextSize = 13
+subtitle.TextXAlignment = Enum.TextXAlignment.Left
+
+----------------------------------------------------------------
+-- CLOSE
+----------------------------------------------------------------
+
+local closeButton = Instance.new("TextButton")
+closeButton.Parent = header
+closeButton.AnchorPoint = Vector2.new(1, 0.5)
+closeButton.Position = UDim2.new(1, -14, 0.5, 0)
+closeButton.Size = UDim2.new(0, 48, 0, 48)
+closeButton.BackgroundColor3 = Color3.fromRGB(170, 55, 60)
+closeButton.BorderSizePixel = 0
+closeButton.Font = Enum.Font.GothamBold
+closeButton.Text = "×"
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.TextSize = 28
+closeButton.AutoButtonColor = true
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 14)
+closeCorner.Parent = closeButton
+
+----------------------------------------------------------------
+-- CONTENT
+----------------------------------------------------------------
+
+local content = Instance.new("Frame")
+content.Parent = frame
+content.BackgroundTransparency = 1
+content.Position = UDim2.new(0, 16, 0, 96)
+content.Size = UDim2.new(1, -32, 1, -112)
+
+----------------------------------------------------------------
+-- INPUT
+----------------------------------------------------------------
+
+local textBox = Instance.new("TextBox")
+textBox.Parent = content
+textBox.Position = UDim2.new(0, 0, 0, 0)
+textBox.Size = UDim2.new(1, 0, 0, 52)
+textBox.BackgroundColor3 = Color3.fromRGB(12, 16, 23)
+textBox.BorderSizePixel = 0
+textBox.Font = Enum.Font.Gotham
+textBox.PlaceholderText = "Введите Username или DisplayName"
+textBox.PlaceholderColor3 = Color3.fromRGB(125, 132, 145)
+textBox.Text = ""
+textBox.TextColor3 = Color3.fromRGB(245, 245, 245)
+textBox.TextSize = 15
+textBox.ClearTextOnFocus = false
+
+local inputCorner = Instance.new("UICorner")
+inputCorner.CornerRadius = UDim.new(0, 12)
+inputCorner.Parent = textBox
+
+local inputStroke = Instance.new("UIStroke")
+inputStroke.Color = Color3.fromRGB(55, 65, 82)
+inputStroke.Thickness = 1
+inputStroke.Parent = textBox
+
+----------------------------------------------------------------
+-- STATUS
+----------------------------------------------------------------
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Parent = content
+statusLabel.Position = UDim2.new(0, 3, 0, 61)
+statusLabel.Size = UDim2.new(1, -6, 0, 52)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.Text = "Статус: выключено"
+statusLabel.TextColor3 = Color3.fromRGB(170, 175, 190)
+statusLabel.TextSize = 14
+statusLabel.TextWrapped = true
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.TextYAlignment = Enum.TextYAlignment.Top
+
+----------------------------------------------------------------
+-- BUTTON FACTORY
+----------------------------------------------------------------
+
+local function createButton(parent, text, position, size)
+    local button = Instance.new("TextButton")
+
+    button.Parent = parent
+    button.Position = position
+    button.Size = size
+    button.BackgroundColor3 = Color3.fromRGB(40, 47, 61)
+    button.BorderSizePixel = 0
+    button.Font = Enum.Font.GothamBold
+    button.Text = text
+    button.TextColor3 = Color3.fromRGB(245, 245, 245)
+    button.TextSize = 14
+    button.AutoButtonColor = true
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = button
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(70, 80, 100)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.2
+    stroke.Parent = button
+
+    return button
+end
+
+----------------------------------------------------------------
+-- ACTIVATE
+----------------------------------------------------------------
+
+local activateButton = createButton(
+    content,
+    "🔴  АКТИВИРОВАТЬ",
+    UDim2.new(0, 0, 0, 118),
+    UDim2.new(0.48, -4, 0, 50)
+)
+
+----------------------------------------------------------------
+-- TELEPORT
+----------------------------------------------------------------
+
+local teleportButton = createButton(
+    content,
+    "⚡  НАЙТИ И ТЕЛЕПОРТИРОВАТЬ",
+    UDim2.new(0.52, 4, 0, 118),
+    UDim2.new(0.48, -4, 0, 50)
+)
+
+teleportButton.BackgroundColor3 = Color3.fromRGB(45, 95, 185)
+
+----------------------------------------------------------------
+-- INFO
+----------------------------------------------------------------
+
+local infoLabel = Instance.new("TextLabel")
+infoLabel.Parent = content
+infoLabel.Position = UDim2.new(0, 4, 0, 180)
+infoLabel.Size = UDim2.new(1, -8, 1, -238)
+infoLabel.BackgroundTransparency = 1
+infoLabel.Font = Enum.Font.Gotham
+infoLabel.Text = "Введите ник игрока.\n\nСкрипт сначала проверит текущий сервер.\nЕсли игрока здесь нет, будет выполнен поиск его текущего сервера."
+infoLabel.TextColor3 = Color3.fromRGB(165, 172, 188)
+infoLabel.TextSize = 14
+infoLabel.TextWrapped = true
+infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+infoLabel.TextYAlignment = Enum.TextYAlignment.Top
+
+----------------------------------------------------------------
+-- HIDE
+----------------------------------------------------------------
+
+local hideButton = createButton(
+    content,
+    "👁️  Скрыть",
+    UDim2.new(0, 0, 1, -50),
+    UDim2.new(0.48, -4, 0, 44)
+)
+
+----------------------------------------------------------------
+-- SHOW BUTTON
+----------------------------------------------------------------
+
+local showButton = Instance.new("TextButton")
+showButton.Parent = gui
+showButton.AnchorPoint = Vector2.new(1, 1)
+showButton.Position = UDim2.new(1, -15, 1, -15)
+showButton.Size = UDim2.new(0, 70, 0, 70)
+showButton.BackgroundColor3 = Color3.fromRGB(27, 32, 43)
+showButton.BorderSizePixel = 0
+showButton.Font = Enum.Font.GothamBold
+showButton.Text = "⚡\nVNMA"
+showButton.TextColor3 = Color3.fromRGB(255, 215, 80)
+showButton.TextSize = 15
+showButton.Visible = false
+showButton.ZIndex = 50
+
+local showCorner = Instance.new("UICorner")
+showCorner.CornerRadius = UDim.new(0, 18)
+showCorner.Parent = showButton
+
+local showStroke = Instance.new("UIStroke")
+showStroke.Color = Color3.fromRGB(255, 215, 80)
+showStroke.Thickness = 2
+showStroke.Parent = showButton
+
+----------------------------------------------------------------
+-- HIDE / SHOW
+----------------------------------------------------------------
+
+local function setHidden(hidden)
+    getgenv().TeleportFinderGuiHidden = hidden
+
+    frame.Visible = not hidden
+    background.Visible = not hidden
+    showButton.Visible = hidden
+end
+
+closeButton.Activated:Connect(function()
+    setHidden(true)
+end)
+
+hideButton.Activated:Connect(function()
+    setHidden(true)
+end)
+
+showButton.Activated:Connect(function()
+    setHidden(false)
+end)
+
+----------------------------------------------------------------
+-- MOBILE DRAG
+----------------------------------------------------------------
+
+local dragging = false
+local dragStart
+local startPosition
+
+header.InputBegan:Connect(function(input)
+
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+
+        dragging = true
+        dragStart = input.Position
+        startPosition = frame.Position
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+
+    if not dragging then
+        return
+    end
+
+    if input.UserInputType ~= Enum.UserInputType.MouseMovement
+    and input.UserInputType ~= Enum.UserInputType.Touch then
+        return
+    end
+
+    local delta = input.Position - dragStart
+
+    frame.Position = UDim2.new(
+        startPosition.X.Scale,
+        startPosition.X.Offset + delta.X,
+        startPosition.Y.Scale,
+        startPosition.Y.Offset + delta.Y
+    )
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+
+        dragging = false
+    end
+end)
+
+----------------------------------------------------------------
+-- ACTIVATION
+----------------------------------------------------------------
+
+local function setActive(active)
+
+    getgenv().TeleportFinderActive = active
+
+    if active then
+        activateButton.BackgroundColor3 = Color3.fromRGB(50, 155, 80)
+        activateButton.Text = "🟢  АКТИВИРОВАНО"
+
+        statusLabel.Text = "Статус: активно"
+        statusLabel.TextColor3 = Color3.fromRGB(100, 230, 130)
+    else
+        activateButton.BackgroundColor3 = Color3.fromRGB(170, 55, 60)
+        activateButton.Text = "🔴  АКТИВИРОВАТЬ"
+
+        statusLabel.Text = "Статус: выключено"
+        statusLabel.TextColor3 = Color3.fromRGB(190, 150, 150)
+    end
+end
+
+activateButton.Activated:Connect(function()
+    setActive(not getgenv().TeleportFinderActive)
+end)
+
+----------------------------------------------------------------
+-- FIND CURRENT SERVER PLAYER
+----------------------------------------------------------------
+
+local function findCurrentPlayer(username)
+
+    username = string.lower(username)
+
+    for _, target in ipairs(Players:GetPlayers()) do
+
+        if target ~= LocalPlayer then
+
+            if string.lower(target.Name) == username
+            or string.lower(target.DisplayName) == username then
+
+                return target
+            end
         end
     end
+
     return nil
 end
 
-local function getPresence(userId)
-    local url = "https://presence.roblox.com/v1/presence/users"
-    local body = HttpService:JSONEncode({ userIds = { userId } })
-    local headers = { ["Content-Type"] = "application/json" }
-    local success, response = pcall(function()
-        return game:GetService("HttpService"):PostAsync(url, body, Enum.HttpContentType.ApplicationJson, false, headers)
+----------------------------------------------------------------
+-- GET USER ID
+----------------------------------------------------------------
+
+local function getUserId(username)
+
+    local success, result = pcall(function()
+        return Players:GetUserIdFromNameAsync(username)
     end)
-    if success then
-        local data = HttpService:JSONDecode(response)
-        if data and data.userPresences and #data.userPresences > 0 then
-            local presence = data.userPresences[1]
-            if presence and presence.placeId and presence.gameId then
-                return presence.placeId, presence.gameId -- gameId это JobId
-            end
-        end
+
+    if success and typeof(result) == "number" then
+        return result
     end
-    return nil, nil
+
+    return nil
 end
 
--- Обработчик кнопки
-button.MouseButton1Click:Connect(function()
-    local username = textBox.Text
+----------------------------------------------------------------
+-- FIND OTHER PLAYER SERVER
+----------------------------------------------------------------
+
+local function findPlayerServer(userId)
+
+    local success, currentInstance, errorMessage, placeId, jobId = pcall(function()
+        return TeleportService:GetPlayerPlaceInstanceAsync(userId)
+    end)
+
+    if not success then
+        return nil, nil, tostring(currentInstance)
+    end
+
+    if not placeId or not jobId then
+        return nil, nil, tostring(errorMessage)
+    end
+
+    return placeId, jobId, nil
+end
+
+----------------------------------------------------------------
+-- TELEPORT
+----------------------------------------------------------------
+
+local function performTeleport()
+
+    if not getgenv().TeleportFinderActive then
+        statusLabel.Text = "Сначала нажми «АКТИВИРОВАТЬ»."
+        statusLabel.TextColor3 = Color3.fromRGB(255, 170, 90)
+        return
+    end
+
+    local username = textBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+
     if username == "" then
-        print("Введите ник!")
+        statusLabel.Text = "Введите Username или DisplayName."
+        statusLabel.TextColor3 = Color3.fromRGB(255, 170, 90)
         return
     end
 
-    -- Ищем на текущем сервере
-    local target = nil
-    for _, p in pairs(Players:GetPlayers()) do
-        if string.lower(p.Name) == string.lower(username) or string.lower(p.DisplayName) == string.lower(username) then
-            target = p
-            break
+    statusLabel.Text = "🔎 Ищу игрока..."
+    statusLabel.TextColor3 = Color3.fromRGB(120, 190, 255)
+
+    ----------------------------------------------------------------
+    -- CURRENT SERVER
+    ----------------------------------------------------------------
+
+    local currentTarget = findCurrentPlayer(username)
+
+    if currentTarget then
+
+        local targetCharacter = currentTarget.Character
+        local targetRoot =
+            targetCharacter
+            and targetCharacter:FindFirstChild("HumanoidRootPart")
+
+        local myCharacter = LocalPlayer.Character
+        local myRoot =
+            myCharacter
+            and myCharacter:FindFirstChild("HumanoidRootPart")
+
+        if targetRoot and myRoot then
+
+            pcall(function()
+                myRoot.CFrame =
+                    targetRoot.CFrame
+                    * CFrame.new(0, 3, 0)
+            end)
+
+            statusLabel.Text =
+                "✅ " .. currentTarget.DisplayName ..
+                "\nИгрок найден на текущем сервере."
+
+            statusLabel.TextColor3 = Color3.fromRGB(100, 230, 130)
+
+            return
         end
     end
 
-    if target then
-        -- Если на этом сервере — телепортируем к нему
-        if target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
-            local myChar = player.Character
-            if myChar and myChar:FindFirstChild("HumanoidRootPart") then
-                myChar.HumanoidRootPart.CFrame = target.Character.HumanoidRootPart.CFrame + Vector3.new(0, 2, 0)
-                print("Телепортировался к " .. target.Name)
-                gui:Destroy()
-                return
-            end
-        end
-        print("Игрок есть на сервере, но персонажа нет")
-        return
-    end
+    ----------------------------------------------------------------
+    -- OTHER SERVER
+    ----------------------------------------------------------------
 
-    -- Если не на текущем сервере — ищем через API
-    print("Ищем игрока через API...")
-    local userId = getUserIdByUsername(username)
+    statusLabel.Text = "🌐 Игрок не на этом сервере.\nПолучаю информацию о его сервере..."
+    statusLabel.TextColor3 = Color3.fromRGB(120, 190, 255)
+
+    local userId = getUserId(username)
+
     if not userId then
-        print("Пользователь не найден")
+        statusLabel.Text = "❌ Username не найден."
+        statusLabel.TextColor3 = Color3.fromRGB(255, 110, 110)
         return
     end
 
-    local placeId, jobId = getPresence(userId)
-    if placeId and jobId then
-        print("Найден сервер: PlaceId=" .. placeId .. ", JobId=" .. jobId)
-        -- Телепортируемся на сервер
-        TeleportService:TeleportToPlaceInstance(placeId, jobId, player)
-        gui:Destroy()
-    else
-        print("Игрок не в игре или сервер недоступен")
+    local placeId, jobId, errorMessage =
+        findPlayerServer(userId)
+
+    if not placeId or not jobId then
+
+        statusLabel.Text =
+            "❌ Не удалось получить сервер игрока.\n" ..
+            (errorMessage or "Игрок не находится в доступной игре.")
+
+        statusLabel.TextColor3 = Color3.fromRGB(255, 110, 110)
+
+        return
+    end
+
+    statusLabel.Text =
+        "✅ Сервер найден.\n🚀 Выполняю телепорт..."
+
+    statusLabel.TextColor3 = Color3.fromRGB(100, 230, 130)
+
+    local success, teleportError = pcall(function()
+        TeleportService:TeleportToPlaceInstance(
+            placeId,
+            jobId,
+            LocalPlayer
+        )
+    end)
+
+    if not success then
+
+        statusLabel.Text =
+            "❌ Ошибка телепорта:\n" ..
+            tostring(teleportError)
+
+        statusLabel.TextColor3 = Color3.fromRGB(255, 110, 110)
+
+        return
+    end
+
+    task.wait(2)
+
+    setHidden(true)
+end
+
+teleportButton.Activated:Connect(performTeleport)
+
+----------------------------------------------------------------
+-- ENTER KEY
+----------------------------------------------------------------
+
+UserInputService.InputBegan:Connect(function(input, processed)
+
+    if processed then
+        return
+    end
+
+    if input.KeyCode == Enum.KeyCode.Return
+    or input.KeyCode == Enum.KeyCode.KeypadEnter then
+
+        performTeleport()
     end
 end)
 
-print("Готово! Введи ник и нажми 'Телепорт'")
+----------------------------------------------------------------
+-- TELEPORT ERROR
+----------------------------------------------------------------
+
+getgenv().TeleportFinderConnections.TeleportFailed =
+    TeleportService.TeleportInitFailed:Connect(
+        function(player, result, errorMessage)
+
+            if player ~= LocalPlayer then
+                return
+            end
+
+            statusLabel.Text =
+                "❌ Телепорт не удался:\n" ..
+                tostring(result) ..
+                "\n" ..
+                tostring(errorMessage)
+
+            statusLabel.TextColor3 =
+                Color3.fromRGB(255, 110, 110)
+        end
+    )
+
+----------------------------------------------------------------
+-- ESC
+----------------------------------------------------------------
+
+getgenv().TeleportFinderConnections.Input =
+    UserInputService.InputBegan:Connect(
+        function(input, processed)
+
+            if processed then
+                return
+            end
+
+            if input.KeyCode == Enum.KeyCode.Escape then
+                setHidden(not getgenv().TeleportFinderGuiHidden)
+            end
+        end
+    )
+
+----------------------------------------------------------------
+-- START
+----------------------------------------------------------------
+
+setActive(false)
+
+print("✅ VNMA TELEPORT FINDER загружен")
+print("🔴 Статус: выключено")
+print("📱 Mobile UI: ON")
