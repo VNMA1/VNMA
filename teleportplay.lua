@@ -1,13 +1,13 @@
 --!nocheck
 -- VNMA TELEPORT FINDER | MOBILE REWORK
 -- Поиск игрока по Username / DisplayName
--- Текущий сервер + поиск сервера игрока
+-- Текущий сервер + поиск сервера игрока (Presence API + fallback)
 -- Mobile-friendly GUI
--- Активация / скрытие / повторное открытие
 
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -269,7 +269,7 @@ infoLabel.Position = UDim2.new(0, 4, 0, 180)
 infoLabel.Size = UDim2.new(1, -8, 1, -238)
 infoLabel.BackgroundTransparency = 1
 infoLabel.Font = Enum.Font.Gotham
-infoLabel.Text = "Введите ник игрока.\n\nСкрипт сначала проверит текущий сервер.\nЕсли игрока здесь нет, будет выполнен поиск его текущего сервера."
+infoLabel.Text = "Введите ник игрока.\n\nСкрипт сначала проверит текущий сервер.\nЕсли игрока здесь нет — запросит его сервер через Presence API."
 infoLabel.TextColor3 = Color3.fromRGB(165, 172, 188)
 infoLabel.TextSize = 14
 infoLabel.TextWrapped = true
@@ -455,24 +455,124 @@ local function getUserId(username)
 end
 
 ----------------------------------------------------------------
--- FIND OTHER PLAYER SERVER
+-- HTTP HELPERS (request / HttpService fallback)
+----------------------------------------------------------------
+
+-- Ищем доступный executor-request
+local httpRequest = (syn and syn.request)
+    or (http and http.request)
+    or (fluxus and fluxus.request)
+    or (krnl and krnl.request)
+    or (secure_call and request)
+    or (typeof(request) == "function" and request)
+    or nil
+
+local function httpPost(url, bodyTable, headers)
+    local body = HttpService:JSONEncode(bodyTable)
+    local finalHeaders = headers or {
+        ["Content-Type"] = "application/json",
+        ["Accept"] = "application/json"
+    }
+
+    -- 1) executor request (работает чаще всего)
+    if httpRequest then
+        local ok, res = pcall(function()
+            return httpRequest({
+                Url = url,
+                Method = "POST",
+                Headers = finalHeaders,
+                Body = body
+            })
+        end)
+
+        if ok and type(res) == "table" and (res.Body or res.body) then
+            local code = res.StatusCode or res.Status or 200
+            return {
+                Success = code < 400,
+                StatusCode = code,
+                Body = res.Body or res.body
+            }
+        end
+    end
+
+    -- 2) HttpService
+    local ok, res = pcall(function()
+        return HttpService:RequestAsync({
+            Url = url,
+            Method = "POST",
+            Headers = finalHeaders,
+            Body = body
+        })
+    end)
+
+    if ok and res then
+        return res
+    end
+
+    return nil, tostring(res)
+end
+
+----------------------------------------------------------------
+-- FIND OTHER PLAYER SERVER (Presence API + fallback)
 ----------------------------------------------------------------
 
 local function findPlayerServer(userId)
 
-    local success, currentInstance, errorMessage, placeId, jobId = pcall(function()
-        return TeleportService:GetPlayerPlaceInstanceAsync(userId)
-    end)
+    -- Прокси → прямой домен
+    local endpoints = {
+        "https://presence.roproxy.com/v1/presence/users",
+        "https://presence.roblox.com/v1/presence/users",
+        "https://presence.rprxy.xyz/v1/presence/users",
+    }
 
-    if not success then
-        return nil, nil, tostring(currentInstance)
+    local lastError = "нет соединения"
+
+    for _, url in ipairs(endpoints) do
+
+        local response, reqErr = httpPost(url, { userIds = { userId } })
+
+        if not response then
+            lastError = tostring(reqErr)
+            continue
+        end
+
+        if not response.Success then
+            lastError = "код " .. tostring(response.StatusCode)
+            continue
+        end
+
+        local ok, data = pcall(function()
+            return HttpService:JSONDecode(response.Body)
+        end)
+
+        if not ok or not data then
+            lastError = "не удалось разобрать ответ"
+            continue
+        end
+
+        local presence = data.userPresences and data.userPresences[1]
+
+        if not presence then
+            return nil, nil, "Игрок не в сети."
+        end
+
+        -- 0 = Offline, 1 = Online (меню), 2 = In Game, 3 = In Studio
+        if presence.userPresenceType ~= 2 then
+            return nil, nil, "Игрок не в игре (статус: "
+                .. tostring(presence.userPresenceType) .. ")."
+        end
+
+        local placeId = presence.placeId
+        local jobId   = presence.gameId
+
+        if not placeId or not jobId or jobId == "" then
+            return nil, nil, "Игрок скрыл свой сервер (приватность)."
+        end
+
+        return placeId, jobId, nil
     end
 
-    if not placeId or not jobId then
-        return nil, nil, tostring(errorMessage)
-    end
-
-    return placeId, jobId, nil
+    return nil, nil, "HTTP недоступен: " .. lastError
 end
 
 ----------------------------------------------------------------
@@ -535,10 +635,10 @@ local function performTeleport()
     end
 
     ----------------------------------------------------------------
-    -- OTHER SERVER
+    -- OTHER SERVER (Presence API)
     ----------------------------------------------------------------
 
-    statusLabel.Text = "🌐 Игрок не на этом сервере.\nПолучаю информацию о его сервере..."
+    statusLabel.Text = "🌐 Игрок не на этом сервере.\nЗапрашиваю Presence API..."
     statusLabel.TextColor3 = Color3.fromRGB(120, 190, 255)
 
     local userId = getUserId(username)
@@ -549,14 +649,13 @@ local function performTeleport()
         return
     end
 
-    local placeId, jobId, errorMessage =
-        findPlayerServer(userId)
+    local placeId, jobId, errorMessage = findPlayerServer(userId)
 
     if not placeId or not jobId then
 
         statusLabel.Text =
             "❌ Не удалось получить сервер игрока.\n" ..
-            (errorMessage or "Игрок не находится в доступной игре.")
+            (errorMessage or "Неизвестная ошибка.")
 
         statusLabel.TextColor3 = Color3.fromRGB(255, 110, 110)
 
@@ -661,3 +760,4 @@ setActive(false)
 print("✅ VNMA TELEPORT FINDER загружен")
 print("🔴 Статус: выключено")
 print("📱 Mobile UI: ON")
+print("🌐 Поиск сервера: Presence API + fallback")
