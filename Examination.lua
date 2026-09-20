@@ -28,7 +28,7 @@ local CFG = {
 	ShowHealth = true,
 	ShowInfected = true,
 	ShowAllies = false,
-	MaxDistance = 300,
+	MaxDistance = 500,
 	BossHealth = 1000,       -- MaxHealth >= этого => босс
 	UpdateRate = 0.15,       -- как часто обновляем (сек). 0.15 ≈ 7 раз/сек
 	MaxHighlights = 30,      -- у Roblox лимит ~31 Highlight одновременно
