@@ -28,25 +28,33 @@ local CFG = {
 	ShowHealth = true,
 	ShowInfected = true,
 	ShowAllies = false,
-	MaxDistance = 400,
+	MaxDistance = 300,
 	BossHealth = 1000,       -- MaxHealth >= этого => босс
 	UpdateRate = 0.15,       -- как часто обновляем (сек). 0.15 ≈ 7 раз/сек
 	MaxHighlights = 30,      -- у Roblox лимит ~31 Highlight одновременно
 	AlliesIfNoTeams = true,  -- если в игре нет команд, считать всех игроков союзниками
+	TrackAllNPCs = true,     -- true = подсвечивать ЛЮБОГО не-игрока с Humanoid (ничего не пропадёт).
+	                         -- false = только по списку имён ниже
 }
 
 -- =========================================================
--- КЛЮЧЕВЫЕ СЛОВА
--- Короткие (<=4 символа) ищутся как ОТДЕЛЬНОЕ слово,
--- длинные — как подстрока. Так "sin" не ловит "using"/"cousin".
+-- КЛЮЧЕВЫЕ СЛОВА (по Examination Wiki)
+-- Очень короткие (<=3 буквы) ищутся как ОТДЕЛЬНОЕ слово
+-- (чтобы "sin" не ловил "using"), остальные — как подстрока.
+-- Регистр не важен.
 -- =========================================================
 local HOSTILE_KEYWORDS = {
-	"lurker", "crawler", "riser", "kamikaze", "shielder", "slasher", "gunner",
-	"fury", "deceiver", "mutant", "radaway", "engineer",
-	"welder", "rsu", "mms", "hpca", "rif ozk",
-	"zombie",
-	"viral runner", "viral executioner", "viral leader", "viral enforcer",
-	"infantryman", "combat medic", "shotgunner", "machine gunner",
+	-- Обычные заражённые
+	"lurker", "crawler", "riser", "mutant", "slasher", "kamikaze", "kamikazi",
+	"shielder", "radaway", "gunner", "fury", "engineer", "deceiver",
+	"janitor", "hazmat", "toxic", "infected", "corpse walker", "corpsewalker",
+	"corpse_walker", "welder", "hpca", "mms", "rsu", "rif ozk", "zombie",
+
+	-- Virals (бывшие солдаты MGF)
+	"viral", "viral runner", "viral executioner", "viral leader", "viral enforcer",
+
+	-- Rasonian Infantry Forces (RIF)
+	"rasonian", "rif", "infantryman", "combat medic", "shotgunner", "machine gunner",
 }
 
 local BOSS_KEYWORDS = {
@@ -57,13 +65,18 @@ local BOSS_KEYWORDS = {
 	"dave", "vorax", "cerberus",
 }
 
+-- Сюда добавляй имена, которые НЕ нужно подсвечивать (дружелюбные NPC, манекены)
+local IGNORE_KEYWORDS = {
+	-- "dummy", "trader",
+}
+
 local function makeMatcher(list)
 	local substrings, patterns = {}, {}
 	for _, kw in ipairs(list) do
 		kw = kw:lower()
-		if #kw <= 4 then
+		if #kw <= 3 then
 			local escaped = (kw:gsub("[^%w]", "%%%0"))
-			patterns[#patterns + 1] = "%f[%w]" .. escaped .. "%f[%W]"
+			patterns[#patterns + 1] = "%f[%a]" .. escaped .. "%f[%A]"
 		else
 			substrings[#substrings + 1] = kw
 		end
@@ -82,6 +95,7 @@ end
 
 local isHostileName = makeMatcher(HOSTILE_KEYWORDS)
 local isBossName = makeMatcher(BOSS_KEYWORDS)
+local isIgnoredName = makeMatcher(IGNORE_KEYWORDS)
 
 local function nameMatches(model, humanoid, matcher)
 	if matcher(model.Name) or matcher(humanoid.DisplayName) then
@@ -215,8 +229,12 @@ local function trackNPC(h)
 		return
 	end
 
+	if nameMatches(model, h, isIgnoredName) then
+		return
+	end
+
 	local boss = nameMatches(model, h, isBossName) or h.MaxHealth >= CFG.BossHealth
-	if not boss and not nameMatches(model, h, isHostileName) then
+	if not boss and not CFG.TrackAllNPCs and not nameMatches(model, h, isHostileName) then
 		return
 	end
 
