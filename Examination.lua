@@ -3,1920 +3,586 @@ local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 
+local LocalPlayer = Players.LocalPlayer
+
+-- =========================================================
+-- ЗАЩИТА ОТ ДВОЙНОГО ЗАПУСКА (повторный execute не плодит копии)
+-- =========================================================
+local env = (getgenv and getgenv()) or _G
+if env.VNMA0_ESP_STOP then
+	pcall(env.VNMA0_ESP_STOP)
+end
+
+local stopped = false
+local connections = {}
+local function bind(signal, fn)
+	local c = signal:Connect(fn)
+	connections[#connections + 1] = c
+	return c
+end
+
 -- =========================================================
 -- НАСТРОЙКИ
 -- =========================================================
-
-local SHOW_HEALTH = true
-
-local MAX_DISTANCE = 300
-
--- Переключатели
-local SHOW_INFECTED = true
-local SHOW_ALLIES = false
-
--- =========================================================
--- ЗАРАЖЁННЫЕ
--- =========================================================
-
-local HOSTILE_KEYWORDS = {
-	-- Основные заражённые
-	"lurker",
-	"crawler",
-	"riser",
-	"kamikaze",
-	"shielder",
-	"slasher",
-	"gunner",
-	"fury",
-	"deceiver",
-	"mutant",
-	"radaway",
-	"engineer",
-
-	-- Варианты Lurker / заражённых
-	"welder",
-	"rsu",
-	"mms",
-	"hpca",
-	"rif ozk",
-
-	-- Зомби
-	"zombie",
-
-	-- Viral
-	"viral runner",
-	"viral executioner",
-	"viral leader",
-	"viral enforcer",
-
-	-- Rasonian
-	"infantryman",
-	"combat medic",
-	"shotgunner",
-	"machine gunner",
-
-	-- Особые враги
-	"d-zero",
-	"dzero",
-	"d_zero",
-	"d zero",
-
-	"chimera",
-	"gilbert",
-	"sinitzyn",
-	"sin",
-	"cerberus",
-
-	-- Дополнительные боссы / мини-боссы
-	"mikhail",
-	"mikhail william",
-	"mikhail williams",
-
-	"yakov",
-	"yakov zhukov",
-	"yakov zhukovich",
-
-	"dave",
-	"vorax",
+local CFG = {
+	ShowHealth = true,
+	ShowInfected = true,
+	ShowAllies = false,
+	MaxDistance = 400,
+	BossHealth = 1000,       -- MaxHealth >= этого => босс
+	UpdateRate = 0.15,       -- как часто обновляем (сек). 0.15 ≈ 7 раз/сек
+	MaxHighlights = 30,      -- у Roblox лимит ~31 Highlight одновременно
+	AlliesIfNoTeams = true,  -- если в игре нет команд, считать всех игроков союзниками
 }
 
 -- =========================================================
--- БОССЫ
+-- КЛЮЧЕВЫЕ СЛОВА
+-- Короткие (<=4 символа) ищутся как ОТДЕЛЬНОЕ слово,
+-- длинные — как подстрока. Так "sin" не ловит "using"/"cousin".
 -- =========================================================
+local HOSTILE_KEYWORDS = {
+	"lurker", "crawler", "riser", "kamikaze", "shielder", "slasher", "gunner",
+	"fury", "deceiver", "mutant", "radaway", "engineer",
+	"welder", "rsu", "mms", "hpca", "rif ozk",
+	"zombie",
+	"viral runner", "viral executioner", "viral leader", "viral enforcer",
+	"infantryman", "combat medic", "shotgunner", "machine gunner",
+}
 
 local BOSS_KEYWORDS = {
-	-- Основные боссы
-	"chimera",
-	"gilbert",
-
-	"sinitzyn",
-	"sin",
-
-	-- D-Zero
-	"d-zero",
-	"dzero",
-	"d_zero",
-	"d zero",
-
-	-- Дополнительные боссы / мини-боссы
-	"mikhail",
-	"mikhail william",
-	"mikhail williams",
-
-	"yakov",
-	"yakov zhukov",
-	"yakov zhukovich",
-
-	"dave",
-	"vorax",
-
-	"cerberus",
+	"chimera", "gilbert", "sinitzyn", "sin",
+	"d-zero", "dzero", "d_zero", "d zero",
+	"mikhail", "mikhail william", "mikhail williams",
+	"yakov", "yakov zhukov", "yakov zhukovich",
+	"dave", "vorax", "cerberus",
 }
 
--- =========================================================
--- PLAYER CHECK
--- =========================================================
-
-local function isPlayerCharacter(model)
-	if not model or not model:IsA("Model") then
-		return false
-	end
-
-	return Players:GetPlayerFromCharacter(model) ~= nil
-end
-
--- =========================================================
--- ПОИСК НАСТОЯЩЕЙ МОДЕЛИ NPC
--- =========================================================
-
-local function getNPCModel(obj)
-	local current = obj
-
-	while current and current ~= Workspace do
-		if current:IsA("Model") then
-			if current:FindFirstChildOfClass("Humanoid") then
-				return current
-			end
-		end
-
-		current = current.Parent
-	end
-
-	return nil
-end
-
--- =========================================================
--- ПРОВЕРКА ИМЕНИ
--- =========================================================
-
-local function containsKeyword(name, keywords)
-	name = string.lower(tostring(name))
-
-	for _, keyword in ipairs(keywords) do
-		if string.find(name, keyword, 1, true) then
-			return true
+local function makeMatcher(list)
+	local substrings, patterns = {}, {}
+	for _, kw in ipairs(list) do
+		kw = kw:lower()
+		if #kw <= 4 then
+			local escaped = (kw:gsub("[^%w]", "%%%0"))
+			patterns[#patterns + 1] = "%f[%w]" .. escaped .. "%f[%W]"
+		else
+			substrings[#substrings + 1] = kw
 		end
 	end
-
-	return false
-end
-
--- Проверка БОССА как отдельного имени/слова.
--- Это не даёт "sin" совпасть с "sinitzyn".
-local function containsWholeKeyword(name, keywords)
-	name = string.lower(tostring(name))
-
-	for _, keyword in ipairs(keywords) do
-		keyword = string.lower(keyword)
-
-		local escapedKeyword =
-			keyword:gsub("([^%w%s])", "%%%1")
-
-		local pattern =
-			"%f[%w]"
-			.. escapedKeyword
-			.. "%f[%W]"
-
-		if string.find(name, pattern) then
-			return true
+	return function(name)
+		name = tostring(name):lower()
+		for _, s in ipairs(substrings) do
+			if name:find(s, 1, true) then return true end
 		end
-	end
-
-	return false
-end
-
-local function containsHostileKeyword(name)
-	return containsKeyword(name, HOSTILE_KEYWORDS)
-end
-
-local function containsBossKeyword(name)
-	return containsWholeKeyword(name, BOSS_KEYWORDS)
-end
-
--- =========================================================
--- HOSTILE / BOSS
--- =========================================================
-
-local function isHostileNPC(model)
-	if not model or not model:IsA("Model") then
+		for _, p in ipairs(patterns) do
+			if name:find(p) then return true end
+		end
 		return false
 	end
+end
 
-	-- Игроков никогда не трогаем
-	if isPlayerCharacter(model) then
-		return false
-	end
+local isHostileName = makeMatcher(HOSTILE_KEYWORDS)
+local isBossName = makeMatcher(BOSS_KEYWORDS)
 
-	-- Нужен Humanoid
-	local humanoid = model:FindFirstChildOfClass("Humanoid")
-
-	if not humanoid then
-		return false
-	end
-
-	-- Имя модели
-	if containsHostileKeyword(model.Name) then
+local function nameMatches(model, humanoid, matcher)
+	if matcher(model.Name) or matcher(humanoid.DisplayName) then
 		return true
 	end
-
-	-- DisplayName Humanoid
-	if humanoid and containsHostileKeyword(humanoid.DisplayName) then
-		return true
-	end
-
-	-- Attribute DisplayName
-	local displayName = model:GetAttribute("DisplayName")
-
-	if typeof(displayName) == "string" then
-		if containsHostileKeyword(displayName) then
-			return true
-		end
-	end
-
-	return false
-end
-
-local function isBossNPC(model)
-	if not model then
-		return false
-	end
-
-	-- Имя модели
-	if containsBossKeyword(model.Name) then
-		return true
-	end
-
-	-- DisplayName Humanoid
-	local humanoid = model:FindFirstChildOfClass("Humanoid")
-
-	if humanoid and containsBossKeyword(humanoid.DisplayName) then
-		return true
-	end
-
-	-- Attribute DisplayName
-	local displayName = model:GetAttribute("DisplayName")
-
-	if typeof(displayName) == "string" then
-		if containsBossKeyword(displayName) then
-			return true
-		end
-	end
-
-	return false
+	local dn = model:GetAttribute("DisplayName")
+	return typeof(dn) == "string" and matcher(dn)
 end
 
 -- =========================================================
--- ROOT
+-- УТИЛИТЫ
 -- =========================================================
+local function new(class, props, parent)
+	local o = Instance.new(class)
+	for k, v in pairs(props) do
+		o[k] = v
+	end
+	o.Parent = parent
+	return o
+end
 
-local function getRootPart(model)
+local function getRoot(model)
 	return model:FindFirstChild("HumanoidRootPart")
 		or model.PrimaryPart
 		or model:FindFirstChildWhichIsA("BasePart")
 end
 
+local NPC_PALETTE = {
+	ok = Color3.fromRGB(255, 255, 255),
+	mid = Color3.fromRGB(255, 220, 60),
+	low = Color3.fromRGB(255, 60, 60),
+}
+local ALLY_PALETTE = {
+	ok = Color3.fromRGB(100, 255, 130),
+	mid = Color3.fromRGB(255, 220, 80),
+	low = Color3.fromRGB(255, 100, 100),
+}
+
+-- Общая функция HP-надписи (и для врагов, и для союзников)
+local function makeHealthLabel(adornee, parent, humanoid, name, width, height, offsetY, textSize, palette)
+	local gui = new("BillboardGui", {
+		Name = name,
+		Adornee = adornee,
+		Size = UDim2.fromOffset(width, height),
+		StudsOffset = Vector3.new(0, offsetY, 0),
+		AlwaysOnTop = true,
+		MaxDistance = CFG.MaxDistance,
+		Enabled = false,
+	}, parent)
+
+	local label = new("TextLabel", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		TextSize = textSize,
+		TextStrokeTransparency = 0.15,
+		TextColor3 = palette.ok,
+	}, gui)
+
+	local function update()
+		local hp, maxHp = humanoid.Health, humanoid.MaxHealth
+		label.Text = string.format("HP: %d / %d", math.max(0, math.round(hp)), math.max(0, math.round(maxHp)))
+		local pct = maxHp > 0 and hp / maxHp or 1
+		label.TextColor3 = (pct <= 0.25 and palette.low) or (pct <= 0.5 and palette.mid) or palette.ok
+	end
+	update()
+
+	local c1 = humanoid.HealthChanged:Connect(update)
+	local c2 = humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(update)
+	gui.Destroying:Connect(function()
+		c1:Disconnect()
+		c2:Disconnect()
+	end)
+
+	return gui
+end
+
 -- =========================================================
--- HEALTH DISPLAY
+-- ЗАРАЖЁННЫЕ / БОССЫ
 -- =========================================================
+local npcs = {} -- [model] = {model, humanoid, boss, root, highlight, gui}
 
-local function createHealthDisplay(model, humanoid)
-	if not SHOW_HEALTH then
+local function paint(e)
+	local hl = e.highlight
+	if e.boss then
+		hl.FillColor = Color3.fromRGB(255, 210, 0)
+		hl.OutlineColor = Color3.fromRGB(255, 240, 100)
+	else
+		hl.FillColor = Color3.fromRGB(255, 0, 0)
+		hl.OutlineColor = Color3.fromRGB(255, 100, 100)
+	end
+end
+
+local function dropNPC(model)
+	local e = npcs[model]
+	if not e then return end
+	npcs[model] = nil
+	if e.highlight then e.highlight:Destroy() end
+	if e.gui then e.gui:Destroy() end
+end
+
+local function ensureNPCVisuals(e)
+	if e.highlight and e.highlight.Parent then
 		return
 	end
 
-	if model:FindFirstChild("NPC_HealthDisplay") then
+	e.highlight = new("Highlight", {
+		Name = "NPC_Highlight",
+		FillTransparency = 0.9,
+		OutlineTransparency = 0.7,
+		DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+		Enabled = false,
+	}, e.model)
+	paint(e)
+
+	if CFG.ShowHealth and not (e.gui and e.gui.Parent) then
+		local _, size = e.model:GetBoundingBox()
+		e.gui = makeHealthLabel(e.root, e.model, e.humanoid, "NPC_HealthDisplay",
+			180, 45, size.Y / 2 + 2, 12, NPC_PALETTE)
+	end
+end
+
+local function trackNPC(h)
+	if stopped then return end
+
+	local model = h.Parent
+	if not model or not model:IsA("Model") or npcs[model] or h.Health <= 0 then
+		return
+	end
+	if Players:GetPlayerFromCharacter(model) then
 		return
 	end
 
-	local root = getRootPart(model)
-
-	if not root then
+	local boss = nameMatches(model, h, isBossName) or h.MaxHealth >= CFG.BossHealth
+	if not boss and not nameMatches(model, h, isHostileName) then
 		return
 	end
 
-	local _, size = model:GetBoundingBox()
+	local e = { model = model, humanoid = h, boss = boss }
+	npcs[model] = e
 
-	local billboard = Instance.new("BillboardGui")
+	-- Труп больше не показываем
+	h.Died:Connect(function()
+		dropNPC(model)
+	end)
 
-	billboard.Name = "NPC_HealthDisplay"
-	billboard.Adornee = root
-
-	billboard.Size = UDim2.fromOffset(180, 45)
-	billboard.StudsOffset = Vector3.new(0, size.Y / 2 + 2, 0)
-
-	billboard.AlwaysOnTop = true
-	billboard.MaxDistance = MAX_DISTANCE
-
-	billboard.Parent = model
-
-	local text = Instance.new("TextLabel")
-
-	text.Name = "HealthText"
-
-	text.Size = UDim2.fromScale(1, 1)
-
-	text.BackgroundTransparency = 1
-
-	text.TextColor3 = Color3.fromRGB(255, 255, 255)
-	text.TextStrokeTransparency = 0
-
-	text.Font = Enum.Font.GothamBold
-
-	text.TextScaled = false
-	text.TextSize = 12
-
-	text.Parent = billboard
-
-	local function updateHealth()
-		local hp = humanoid.Health
-		local maxHp = humanoid.MaxHealth
-
-		text.Text = string.format(
-			"HP: %d / %d",
-			math.max(0, math.round(hp)),
-			math.max(0, math.round(maxHp))
-		)
-
-		-- HP меняет цвет в зависимости от оставшегося здоровья
-		if maxHp > 0 then
-			local percent = hp / maxHp
-
-			if percent <= 0.25 then
-				text.TextColor3 =
-					Color3.fromRGB(255, 60, 60)
-
-			elseif percent <= 0.5 then
-				text.TextColor3 =
-					Color3.fromRGB(255, 220, 60)
-
-			else
-				text.TextColor3 =
-					Color3.fromRGB(255, 255, 255)
-			end
-		end
-	end
-
-	updateHealth()
-
-	humanoid.HealthChanged:Connect(function()
-		if text.Parent then
-			updateHealth()
+	model.AncestryChanged:Connect(function(_, parent)
+		if not parent then
+			dropNPC(model)
 		end
 	end)
 
-	humanoid:GetPropertyChangedSignal("MaxHealth"):Connect(function()
-		if text.Parent then
-			updateHealth()
+	-- Обычный заражённый может стать боссом, если MaxHealth выставят позже.
+	-- Обратно босс не понижается.
+	h:GetPropertyChangedSignal("MaxHealth"):Connect(function()
+		if not e.boss and h.MaxHealth >= CFG.BossHealth then
+			e.boss = true
+			if e.highlight then paint(e) end
 		end
 	end)
 end
 
--- =========================================================
--- HIGHLIGHT
--- =========================================================
-
-local function createHighlight(model, bossState)
-	if model:FindFirstChild("NPC_Highlight") then
-		return
-	end
-
-	local highlight = Instance.new("Highlight")
-
-	highlight.Name = "NPC_Highlight"
-
-	-- =====================================================
-	-- 🟨 БОСС
-	-- =====================================================
-
-	if bossState then
-		highlight.FillColor =
-			Color3.fromRGB(255, 210, 0)
-
-		highlight.OutlineColor =
-			Color3.fromRGB(255, 240, 100)
-
-		highlight.FillTransparency = 0.90
-		highlight.OutlineTransparency = 0.70
-
-	-- =====================================================
-	-- 🔴 ЗАРАЖЁННЫЙ
-	-- =====================================================
-
-	else
-		highlight.FillColor =
-			Color3.fromRGB(255, 0, 0)
-
-		highlight.OutlineColor =
-			Color3.fromRGB(255, 100, 100)
-
-		highlight.FillTransparency = 0.90
-		highlight.OutlineTransparency = 0.70
-	end
-
-	highlight.DepthMode =
-		Enum.HighlightDepthMode.AlwaysOnTop
-
-	highlight.Parent = model
+local function onHumanoidAdded(h)
+	-- Даём игре время выставить имя/HP, потом проверяем; вторая попытка через 2 сек
+	task.defer(trackNPC, h)
+	task.delay(2, trackNPC, h)
 end
 
--- =========================================================
--- ОЧИСТКА ЗАРАЖЁННОГО
--- =========================================================
-
-local function removeNPCVisuals(model)
-	if not model then
-		return
-	end
-
-	for _, name in ipairs({
-		"NPC_Highlight",
-		"NPC_HealthDisplay"
-	}) do
-		local object = model:FindFirstChild(name)
-
-		if object then
-			object:Destroy()
-		end
+-- Ловим только Humanoid, а не каждую добавленную деталь в Workspace
+for _, d in ipairs(Workspace:GetDescendants()) do
+	if d:IsA("Humanoid") then
+		onHumanoidAdded(d)
 	end
 end
 
--- =========================================================
--- SETUP
--- =========================================================
-
-local trackedNPCs = {}
-
--- Здесь хранится окончательный тип NPC.
--- false = заражённый
--- true = босс
---
--- После определения боссом NPC НЕ может
--- обратно стать заражённым из-за падения HP.
-local trackedBosses = {}
-
-local function setupNPC(model)
-
-	if not model or not model:IsA("Model") then
-		return
+bind(Workspace.DescendantAdded, function(d)
+	if d:IsA("Humanoid") then
+		onHumanoidAdded(d)
 	end
-
-	-- Игроков исключаем
-	if isPlayerCharacter(model) then
-		return
-	end
-
-	local humanoid =
-		model:FindFirstChildOfClass("Humanoid")
-
-	if not humanoid then
-		return
-	end
-
-	-- =====================================================
-	-- ОПРЕДЕЛЕНИЕ
-	-- =====================================================
-
-	local hostile = isHostileNPC(model)
-
-	local namedBoss = isBossNPC(model)
-
-	-- ВАЖНО:
-	-- Используем MaxHealth, а НЕ текущий Health.
-	--
-	-- 1200 / 1200 -> босс
-	-- 1200 / 650  -> всё ещё босс
-	-- 750 / 750   -> не босс
-	local healthBoss =
-		humanoid.MaxHealth >= 1000
-
-	-- =====================================================
-	-- NPC должен быть либо известным врагом,
-	-- либо известным боссом,
-	-- либо иметь 1000+ MaxHealth.
-	-- =====================================================
-
-	if not hostile and not namedBoss and not healthBoss then
-		return
-	end
-
-	trackedNPCs[model] = true
-
-	-- =====================================================
-	-- ФИКСАЦИЯ ТИПА
-	-- =====================================================
-
-	if trackedBosses[model] == nil then
-
-		-- Первый раз:
-		-- именной босс ИЛИ 1000+ MaxHealth
-		trackedBosses[model] =
-			namedBoss or healthBoss
-
-	else
-
-		-- =================================================
-		-- Босс никогда не понижается обратно.
-		--
-		-- Но заражённый может стать боссом,
-		-- если MaxHealth позже установится >= 1000.
-		-- =================================================
-
-		if not trackedBosses[model] then
-
-			if namedBoss or healthBoss then
-				trackedBosses[model] = true
-			end
-
-		end
-	end
-
-	local bossState =
-		trackedBosses[model]
-
-	-- =====================================================
-	-- ПОКАЗ
-	-- =====================================================
-
-	if not SHOW_INFECTED then
-		removeNPCVisuals(model)
-		return
-	end
-
-	createHighlight(model, bossState)
-	createHealthDisplay(model, humanoid)
-end
+end)
 
 -- =========================================================
 -- СОЮЗНИКИ
 -- =========================================================
+local allyVis = setmetatable({}, { __mode = "k" }) -- [character] = {highlight, gui}
 
-local trackedAllies = {}
-
-local function isAllyPlayer(player)
-	if not player or player == Players.LocalPlayer then
+local function isAlly(player)
+	if player == LocalPlayer then
 		return false
 	end
+	local mine, theirs = LocalPlayer.Team, player.Team
+	if mine == nil or theirs == nil then
+		return CFG.AlliesIfNoTeams
+	end
+	return mine == theirs
+end
 
-	-- Показываем игроков только своей команды
-	if player.Team == nil
-		or Players.LocalPlayer.Team == nil then
+local function createAllyVisuals(char, hum, root)
+	local hl = new("Highlight", {
+		Name = "VNMA0_AllyHighlight",
+		FillColor = Color3.fromRGB(60, 255, 100),
+		OutlineColor = Color3.fromRGB(90, 255, 120),
+		FillTransparency = 0.9,
+		OutlineTransparency = 0.7,
+		DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
+		Enabled = false,
+	}, char)
 
-		return false
+	local gui
+	if CFG.ShowHealth then
+		gui = makeHealthLabel(char:FindFirstChild("Head") or root, char, hum,
+			"VNMA0_AllyHealth", 100, 20, 2.8, 11, ALLY_PALETTE)
 	end
 
-	return player.Team ==
-		Players.LocalPlayer.Team
+	return { highlight = hl, gui = gui }
+end
+
+-- Игроков мало, поэтому перебираем их напрямую — без ивентов и трекинга команд
+local function updateAllies(origin)
+	local used = 0
+
+	for _, p in ipairs(Players:GetPlayers()) do
+		local char = p.Character
+		local vis = char and allyVis[char]
+		local show = false
+
+		if char and CFG.ShowAllies and isAlly(p) then
+			local root = getRoot(char)
+			local hum = char:FindFirstChildOfClass("Humanoid")
+
+			if root and hum and hum.Health > 0
+				and (root.Position - origin).Magnitude <= CFG.MaxDistance then
+
+				if not vis then
+					vis = createAllyVisuals(char, hum, root)
+					allyVis[char] = vis
+				end
+				show = true
+			end
+		end
+
+		if vis then
+			vis.highlight.Enabled = show
+			if vis.gui then vis.gui.Enabled = show end
+			if show then used += 1 end
+		end
+	end
+
+	return used
 end
 
 -- =========================================================
--- HEALTH СОЮЗНИКА
+-- ГЛАВНЫЙ ЦИКЛ (~7 раз/сек вместо 60+ на каждый кадр)
 -- =========================================================
+local acc = 0
 
-local function removeAllyHealth(character)
-	if not character then
-		return
-	end
+bind(RunService.Heartbeat, function(dt)
+	acc += dt
+	if acc < CFG.UpdateRate then return end
+	acc = 0
 
-	local gui =
-		character:FindFirstChild("VNMA0_AllyHealth")
+	local char = LocalPlayer.Character
+	local myRoot = char and getRoot(char)
+	if not myRoot then return end
+	local origin = myRoot.Position
 
-	if gui then
-		gui:Destroy()
-	end
-end
+	-- Союзники в приоритете, остаток лимита Highlight — врагам
+	local budget = CFG.MaxHighlights - updateAllies(origin)
 
-local function createAllyHealth(character)
-	if not SHOW_HEALTH then
-		return
-	end
+	local inRange, list = {}, {}
 
-	if not character
-		or not character:IsA("Model") then
+	if CFG.ShowInfected then
+		for model, e in pairs(npcs) do
+			local root = e.root
+			if not root or not root.Parent then
+				root = getRoot(model)
+				e.root = root
+			end
 
-		return
-	end
-
-	if character ==
-		Players.LocalPlayer.Character then
-
-		return
-	end
-
-	if character:FindFirstChild(
-		"VNMA0_AllyHealth"
-	) then
-		return
-	end
-
-	local humanoid =
-		character:FindFirstChildOfClass("Humanoid")
-
-	if not humanoid then
-		return
-	end
-
-	local head =
-		character:FindFirstChild("Head")
-
-	local root =
-		getRootPart(character)
-
-	local adornee =
-		head or root
-
-	if not adornee then
-		return
-	end
-
-	local billboard =
-		Instance.new("BillboardGui")
-
-	billboard.Name =
-		"VNMA0_AllyHealth"
-
-	billboard.Adornee =
-		adornee
-
-	billboard.Size =
-		UDim2.fromOffset(100, 20)
-
-	billboard.StudsOffset =
-		Vector3.new(0, 2.8, 0)
-
-	billboard.AlwaysOnTop =
-		true
-
-	billboard.MaxDistance =
-		MAX_DISTANCE
-
-	billboard.Enabled =
-		SHOW_ALLIES
-
-	billboard.Parent =
-		character
-
-	local text =
-		Instance.new("TextLabel")
-
-	text.Name =
-		"HealthText"
-
-	text.Size =
-		UDim2.fromScale(1, 1)
-
-	text.BackgroundTransparency =
-		1
-
-	text.TextColor3 =
-		Color3.fromRGB(100, 255, 130)
-
-	text.TextStrokeColor3 =
-		Color3.fromRGB(0, 0, 0)
-
-	text.TextStrokeTransparency =
-		0.15
-
-	text.Font =
-		Enum.Font.GothamBold
-
-	text.TextScaled =
-		false
-
-	text.TextSize =
-		11
-
-	text.Parent =
-		billboard
-
-	local function updateHealth()
-
-		local hp =
-			humanoid.Health
-
-		local maxHp =
-			humanoid.MaxHealth
-
-		text.Text =
-			string.format(
-				"HP: %d / %d",
-				math.max(0, math.round(hp)),
-				math.max(0, math.round(maxHp))
-			)
-
-		-- HP союзника тоже меняет цвет
-		if maxHp > 0 then
-
-			local percent =
-				hp / maxHp
-
-			if percent <= 0.25 then
-
-				text.TextColor3 =
-					Color3.fromRGB(
-						255,
-						100,
-						100
-					)
-
-			elseif percent <= 0.5 then
-
-				text.TextColor3 =
-					Color3.fromRGB(
-						255,
-						220,
-						80
-					)
-
-			else
-
-				text.TextColor3 =
-					Color3.fromRGB(
-						100,
-						255,
-						130
-					)
-
+			if root then
+				local d = (root.Position - origin).Magnitude
+				if d <= CFG.MaxDistance then
+					ensureNPCVisuals(e)
+					inRange[e] = true
+					list[#list + 1] = { e = e, d = d }
+				end
 			end
 		end
 	end
 
-	updateHealth()
+	table.sort(list, function(a, b) return a.d < b.d end)
 
-	humanoid.HealthChanged:Connect(function()
-
-		if text.Parent then
-			updateHealth()
-		end
-
-	end)
-
-	humanoid:GetPropertyChangedSignal(
-		"MaxHealth"
-	):Connect(function()
-
-		if text.Parent then
-			updateHealth()
-		end
-
-	end)
-end
-
--- =========================================================
--- HIGHLIGHT СОЮЗНИКА
--- =========================================================
-
-local function removeAllyVisual(character)
-	if not character then
-		return
+	-- Highlight только у ближайших (лимит движка), HP-надпись у всех в радиусе
+	local hlOn = {}
+	for i = 1, math.min(#list, budget) do
+		hlOn[list[i].e] = true
 	end
 
-	local highlight =
-		character:FindFirstChild(
-			"VNMA0_AllyHighlight"
-		)
-
-	if highlight then
-		highlight:Destroy()
+	for _, e in pairs(npcs) do
+		if e.highlight then e.highlight.Enabled = hlOn[e] == true end
+		if e.gui then e.gui.Enabled = inRange[e] == true end
 	end
-
-	removeAllyHealth(character)
-
-	trackedAllies[character] =
-		nil
-end
-
-local function createAllyHighlight(character)
-
-	if not character
-		or not character:IsA("Model") then
-
-		return
-	end
-
-	if character ==
-		Players.LocalPlayer.Character then
-
-		return
-	end
-
-	if character:FindFirstChild(
-		"VNMA0_AllyHighlight"
-	) then
-		return
-	end
-
-	local highlight =
-		Instance.new("Highlight")
-
-	highlight.Name =
-		"VNMA0_AllyHighlight"
-
-	-- 🟢 ЕЛЕ ЗАМЕТНЫЙ ЗЕЛЁНЫЙ
-	highlight.FillColor =
-		Color3.fromRGB(
-			60,
-			255,
-			100
-		)
-
-	highlight.OutlineColor =
-		Color3.fromRGB(
-			90,
-			255,
-			120
-		)
-
-	highlight.FillTransparency =
-		0.90
-
-	highlight.OutlineTransparency =
-		0.70
-
-	highlight.DepthMode =
-		Enum.HighlightDepthMode.AlwaysOnTop
-
-	highlight.Enabled =
-		SHOW_ALLIES
-
-	highlight.Parent =
-		character
-
-	trackedAllies[character] =
-		true
-
-	-- HP над головой
-	createAllyHealth(character)
-end
-
-local function setupAlly(player)
-
-	if not isAllyPlayer(player) then
-		return
-	end
-
-	local character =
-		player.Character
-
-	if character then
-		createAllyHighlight(character)
-	end
-end
-
-local function refreshAllies()
-
-	for character in pairs(trackedAllies) do
-		removeAllyVisual(character)
-	end
-
-	if not SHOW_ALLIES then
-		return
-	end
-
-	for _, player in ipairs(
-		Players:GetPlayers()
-	) do
-		setupAlly(player)
-	end
-end
-
--- =========================================================
--- СУЩЕСТВУЮЩИЕ NPC
--- =========================================================
-
-for _, obj in ipairs(
-	Workspace:GetDescendants()
-) do
-
-	local model =
-		getNPCModel(obj)
-
-	if model then
-		setupNPC(model)
-	end
-end
-
--- =========================================================
--- НОВЫЕ NPC
--- =========================================================
-
-Workspace.DescendantAdded:Connect(
-	function(obj)
-
-		task.defer(function()
-
-			local model =
-				getNPCModel(obj)
-
-			if model then
-				setupNPC(model)
-			end
-
-		end)
-
-	end
-)
-
--- =========================================================
--- ИГРОКИ / СОЮЗНИКИ
--- =========================================================
-
-for _, player in ipairs(
-	Players:GetPlayers()
-) do
-
-	if player ~= Players.LocalPlayer then
-
-		player.CharacterAdded:Connect(
-			function()
-
-				task.wait(0.2)
-				setupAlly(player)
-
-			end
-		)
-
-	end
-end
-
-Players.PlayerAdded:Connect(
-	function(player)
-
-		player.CharacterAdded:Connect(
-			function()
-
-				task.wait(0.2)
-				setupAlly(player)
-
-			end
-		)
-
-	end
-)
-
-Players.PlayerRemoving:Connect(
-	function(player)
-
-		if player.Character then
-			removeAllyVisual(
-				player.Character
-			)
-		end
-
-	end
-)
-
-Players.LocalPlayer:GetPropertyChangedSignal(
-	"Team"
-):Connect(function()
-
-	refreshAllies()
-
 end)
-
--- =========================================================
--- DISTANCE CHECK
--- =========================================================
-
-RunService.RenderStepped:Connect(
-	function()
-
-		local localCharacter =
-			Players.LocalPlayer.Character
-
-		if not localCharacter then
-			return
-		end
-
-		local localRoot =
-			getRootPart(localCharacter)
-
-		if not localRoot then
-			return
-		end
-
-		-- =================================================
-		-- ЗАРАЖЁННЫЕ
-		-- =================================================
-
-		for model in pairs(
-			trackedNPCs
-		) do
-
-			if not model.Parent then
-
-				trackedNPCs[model] =
-					nil
-
-				trackedBosses[model] =
-					nil
-
-			else
-
-				local root =
-					getRootPart(model)
-
-				if root then
-
-					local distance =
-						(
-							root.Position
-							- localRoot.Position
-						).Magnitude
-
-					local visible =
-						SHOW_INFECTED
-						and distance <= MAX_DISTANCE
-
-					local highlight =
-						model:FindFirstChild(
-							"NPC_Highlight"
-						)
-
-					local health =
-						model:FindFirstChild(
-							"NPC_HealthDisplay"
-						)
-
-					if highlight then
-						highlight.Enabled =
-							visible
-					end
-
-					if health then
-						health.Enabled =
-							visible
-					end
-
-				end
-			end
-		end
-
-		-- =================================================
-		-- СОЮЗНИКИ
-		-- =================================================
-
-		for character in pairs(
-			trackedAllies
-		) do
-
-			if not character.Parent then
-
-				trackedAllies[character] =
-					nil
-
-			else
-
-				local root =
-					getRootPart(character)
-
-				local highlight =
-					character:FindFirstChild(
-						"VNMA0_AllyHighlight"
-					)
-
-				local health =
-					character:FindFirstChild(
-						"VNMA0_AllyHealth"
-					)
-
-				if root then
-
-					local distance =
-						(
-							root.Position
-							- localRoot.Position
-						).Magnitude
-
-					local player =
-						Players:GetPlayerFromCharacter(
-							character
-						)
-
-					local visible =
-						SHOW_ALLIES
-						and distance <= MAX_DISTANCE
-						and isAllyPlayer(player)
-
-					if highlight then
-						highlight.Enabled =
-							visible
-					end
-
-					if health then
-						health.Enabled =
-							visible
-
-						health.MaxDistance =
-							MAX_DISTANCE
-					end
-
-				end
-			end
-		end
-
-	end
-)
 
 -- =========================================================
 -- GUI
 -- =========================================================
-
-local Player =
-	Players.LocalPlayer
-
-local PlayerGui =
-	Player:WaitForChild(
-		"PlayerGui"
-	)
-
-local oldGui =
-	PlayerGui:FindFirstChild(
-		"VNMA0_ESP_GUI"
-	)
-
-if oldGui then
-	oldGui:Destroy()
-end
-
-local ScreenGui =
-	Instance.new("ScreenGui")
-
-ScreenGui.Name =
-	"VNMA0_ESP_GUI"
-
-ScreenGui.ResetOnSpawn =
-	false
-
-ScreenGui.ZIndexBehavior =
-	Enum.ZIndexBehavior.Sibling
-
-ScreenGui.Parent =
-	PlayerGui
-
--- =========================================================
--- MAIN
--- =========================================================
-
-local Main =
-	Instance.new("Frame")
-
-Main.Name =
-	"Main"
-
-Main.Size =
-	UDim2.fromOffset(
-		245,
-		175
-	)
-
-Main.Position =
-	UDim2.new(
-		0,
-		20,
-		0.5,
-		-87
-	)
-
-Main.BackgroundColor3 =
-	Color3.fromRGB(
-		18,
-		18,
-		22
-	)
-
-Main.BorderSizePixel =
-	0
-
-Main.Active =
-	true
-
-Main.Parent =
-	ScreenGui
-
-local MainCorner =
-	Instance.new("UICorner")
-
-MainCorner.CornerRadius =
-	UDim.new(
-		0,
-		12
-	)
-
-MainCorner.Parent =
-	Main
-
-local MainStroke =
-	Instance.new("UIStroke")
-
-MainStroke.Color =
-	Color3.fromRGB(
-		70,
-		70,
-		80
-	)
-
-MainStroke.Thickness =
-	1
-
-MainStroke.Transparency =
-	0.2
-
-MainStroke.Parent =
-	Main
-
--- =========================================================
--- HEADER
--- =========================================================
-
-local Header =
-	Instance.new("Frame")
-
-Header.Name =
-	"Header"
-
-Header.Size =
-	UDim2.new(
-		1,
-		0,
-		0,
-		46
-	)
-
-Header.BackgroundColor3 =
-	Color3.fromRGB(
-		27,
-		27,
-		33
-	)
-
-Header.BorderSizePixel =
-	0
-
-Header.Active =
-	true
-
-Header.Parent =
-	Main
-
-local HeaderCorner =
-	Instance.new("UICorner")
-
-HeaderCorner.CornerRadius =
-	UDim.new(
-		0,
-		12
-	)
-
-HeaderCorner.Parent =
-	Header
-
-local Title =
-	Instance.new("TextLabel")
-
-Title.Name =
-	"Title"
-
-Title.Size =
-	UDim2.new(
-		1,
-		-55,
-		1,
-		0
-	)
-
-Title.Position =
-	UDim2.fromOffset(
-		12,
-		0
-	)
-
-Title.BackgroundTransparency =
-	1
-
-Title.Text =
-	"VNMA0  •  ESP"
-
-Title.TextColor3 =
-	Color3.fromRGB(
-		255,
-		255,
-		255
-	)
-
-Title.TextSize =
-	17
-
-Title.Font =
-	Enum.Font.GothamBold
-
-Title.TextXAlignment =
-	Enum.TextXAlignment.Left
-
-Title.Parent =
-	Header
-
-local Subtitle =
-	Instance.new("TextLabel")
-
-Subtitle.Size =
-	UDim2.new(
-		1,
-		-55,
-		0,
-		14
-	)
-
-Subtitle.Position =
-	UDim2.fromOffset(
-		12,
-		27
-	)
-
-Subtitle.BackgroundTransparency =
-	1
-
-Subtitle.Text =
-	"TG: VNMA0  •  300 studs"
-
-Subtitle.TextColor3 =
-	Color3.fromRGB(
-		130,
-		130,
-		140
-	)
-
-Subtitle.TextSize =
-	9
-
-Subtitle.Font =
-	Enum.Font.Gotham
-
-Subtitle.TextXAlignment =
-	Enum.TextXAlignment.Left
-
-Subtitle.Parent =
-	Header
-
-local Minimize =
-	Instance.new("TextButton")
-
-Minimize.Name =
-	"Minimize"
-
-Minimize.Size =
-	UDim2.fromOffset(
-		30,
-		30
-	)
-
-Minimize.Position =
-	UDim2.new(
-		1,
-		-38,
-		0,
-		8
-	)
-
-Minimize.BackgroundColor3 =
-	Color3.fromRGB(
-		40,
-		40,
-		48
-	)
-
-Minimize.BorderSizePixel =
-	0
-
-Minimize.Text =
-	"—"
-
-Minimize.TextColor3 =
-	Color3.fromRGB(
-		230,
-		230,
-		230
-	)
-
-Minimize.TextSize =
-	18
-
-Minimize.Font =
-	Enum.Font.GothamBold
-
-Minimize.AutoButtonColor =
-	true
-
-Minimize.Parent =
-	Header
-
-local MinCorner =
-	Instance.new("UICorner")
-
-MinCorner.CornerRadius =
-	UDim.new(
-		0,
-		8
-	)
-
-MinCorner.Parent =
-	Minimize
-
--- =========================================================
--- CONTENT
--- =========================================================
-
-local Content =
-	Instance.new("Frame")
-
-Content.Name =
-	"Content"
-
-Content.Size =
-	UDim2.new(
-		1,
-		-20,
-		1,
-		-57
-	)
-
-Content.Position =
-	UDim2.fromOffset(
-		10,
-		52
-	)
-
-Content.BackgroundTransparency =
-	1
-
-Content.Parent =
-	Main
-
-local Layout =
-	Instance.new("UIListLayout")
-
-Layout.Padding =
-	UDim.new(
-		0,
-		8
-	)
-
-Layout.HorizontalAlignment =
-	Enum.HorizontalAlignment.Center
-
-Layout.VerticalAlignment =
-	Enum.VerticalAlignment.Top
-
-Layout.Parent =
-	Content
-
-local function createToggle(
-	text,
-	callback
-)
-
-	local Button =
-		Instance.new("TextButton")
-
-	Button.Size =
-		UDim2.new(
-			1,
-			0,
-			0,
-			42
-		)
-
-	Button.BackgroundColor3 =
-		Color3.fromRGB(
-			31,
-			31,
-			38
-		)
-
-	Button.BorderSizePixel =
-		0
-
-	Button.Text =
-		text
-
-	Button.TextColor3 =
-		Color3.fromRGB(
-			235,
-			235,
-			240
-		)
-
-	Button.TextSize =
-		13
-
-	Button.Font =
-		Enum.Font.GothamSemibold
-
-	Button.AutoButtonColor =
-		true
-
-	Button.Parent =
-		Content
-
-	local Corner =
-		Instance.new("UICorner")
-
-	Corner.CornerRadius =
-		UDim.new(
-			0,
-			9
-		)
-
-	Corner.Parent =
-		Button
-
-	local Stroke =
-		Instance.new("UIStroke")
-
-	Stroke.Color =
-		Color3.fromRGB(
-			60,
-			60,
-			70
-		)
-
-	Stroke.Transparency =
-		0.45
-
-	Stroke.Parent =
-		Button
-
-	Button.Activated:Connect(
-		callback
-	)
-
-	return Button
-end
-
-local InfectedButton
-local AlliesButton
-
-local function updateButtons()
-
-	if SHOW_INFECTED then
-
-		InfectedButton.Text =
-			"☣  Заражённые   [ ВКЛ ]"
-
-		InfectedButton.TextColor3 =
-			Color3.fromRGB(
-				255,
-				120,
-				120
-			)
-
-	else
-
-		InfectedButton.Text =
-			"☣  Заражённые   [ ВЫКЛ ]"
-
-		InfectedButton.TextColor3 =
-			Color3.fromRGB(
-				150,
-				150,
-				155
-			)
-
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local old = playerGui:FindFirstChild("VNMA0_ESP_GUI")
+if old then old:Destroy() end
+
+local screenGui = new("ScreenGui", {
+	Name = "VNMA0_ESP_GUI",
+	ResetOnSpawn = false,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, playerGui)
+
+local main = new("Frame", {
+	Name = "Main",
+	Size = UDim2.fromOffset(245, 175),
+	Position = UDim2.new(0, 20, 0.5, -87),
+	BackgroundColor3 = Color3.fromRGB(18, 18, 22),
+	BorderSizePixel = 0,
+	Active = true,
+}, screenGui)
+new("UICorner", { CornerRadius = UDim.new(0, 12) }, main)
+new("UIStroke", { Color = Color3.fromRGB(70, 70, 80), Transparency = 0.2 }, main)
+
+local header = new("Frame", {
+	Name = "Header",
+	Size = UDim2.new(1, 0, 0, 46),
+	BackgroundColor3 = Color3.fromRGB(27, 27, 33),
+	BorderSizePixel = 0,
+	Active = true,
+}, main)
+new("UICorner", { CornerRadius = UDim.new(0, 12) }, header)
+
+new("TextLabel", {
+	Size = UDim2.new(1, -55, 1, 0),
+	Position = UDim2.fromOffset(12, 0),
+	BackgroundTransparency = 1,
+	Text = "VNMA0  •  ESP",
+	TextColor3 = Color3.fromRGB(255, 255, 255),
+	TextSize = 17,
+	Font = Enum.Font.GothamBold,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, header)
+
+new("TextLabel", {
+	Size = UDim2.new(1, -55, 0, 14),
+	Position = UDim2.fromOffset(12, 27),
+	BackgroundTransparency = 1,
+	Text = string.format("TG: VNMA0  •  %d studs", CFG.MaxDistance),
+	TextColor3 = Color3.fromRGB(130, 130, 140),
+	TextSize = 9,
+	Font = Enum.Font.Gotham,
+	TextXAlignment = Enum.TextXAlignment.Left,
+}, header)
+
+local minimize = new("TextButton", {
+	Name = "Minimize",
+	Size = UDim2.fromOffset(30, 30),
+	Position = UDim2.new(1, -38, 0, 8),
+	BackgroundColor3 = Color3.fromRGB(40, 40, 48),
+	BorderSizePixel = 0,
+	Text = "—",
+	TextColor3 = Color3.fromRGB(230, 230, 230),
+	TextSize = 18,
+	Font = Enum.Font.GothamBold,
+}, header)
+new("UICorner", { CornerRadius = UDim.new(0, 8) }, minimize)
+
+local content = new("Frame", {
+	Name = "Content",
+	Size = UDim2.new(1, -20, 1, -57),
+	Position = UDim2.fromOffset(10, 52),
+	BackgroundTransparency = 1,
+}, main)
+
+new("UIListLayout", {
+	Padding = UDim.new(0, 8),
+	HorizontalAlignment = Enum.HorizontalAlignment.Center,
+	VerticalAlignment = Enum.VerticalAlignment.Top,
+}, content)
+
+local OFF_COLOR = Color3.fromRGB(150, 150, 155)
+
+local function createToggle(icon, label, key, onColor)
+	local btn = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 42),
+		BackgroundColor3 = Color3.fromRGB(31, 31, 38),
+		BorderSizePixel = 0,
+		TextSize = 13,
+		Font = Enum.Font.GothamSemibold,
+	}, content)
+	new("UICorner", { CornerRadius = UDim.new(0, 9) }, btn)
+	new("UIStroke", { Color = Color3.fromRGB(60, 60, 70), Transparency = 0.45 }, btn)
+
+	local function refresh()
+		local on = CFG[key]
+		btn.Text = string.format("%s  %s   [ %s ]", icon, label, on and "ВКЛ" or "ВЫКЛ")
+		btn.TextColor3 = on and onColor or OFF_COLOR
 	end
 
-	if SHOW_ALLIES then
-
-		AlliesButton.Text =
-			"●  Союзники       [ ВКЛ ]"
-
-		AlliesButton.TextColor3 =
-			Color3.fromRGB(
-				100,
-				255,
-				130
-			)
-
-	else
-
-		AlliesButton.Text =
-			"●  Союзники       [ ВЫКЛ ]"
-
-		AlliesButton.TextColor3 =
-			Color3.fromRGB(
-				150,
-				150,
-				155
-			)
-
-	end
+	btn.Activated:Connect(function()
+		CFG[key] = not CFG[key]
+		refresh()
+	end)
+	refresh()
 end
 
-InfectedButton =
-	createToggle(
-		"",
-		function()
+createToggle("☣", "Заражённые", "ShowInfected", Color3.fromRGB(255, 120, 120))
+createToggle("●", "Союзники", "ShowAllies", Color3.fromRGB(100, 255, 130))
 
-			SHOW_INFECTED =
-				not SHOW_INFECTED
+new("TextLabel", {
+	Size = UDim2.new(1, 0, 0, 24),
+	BackgroundTransparency = 1,
+	Text = "ESP Control  •  VNMA0",
+	TextColor3 = Color3.fromRGB(105, 105, 115),
+	TextSize = 10,
+	Font = Enum.Font.Gotham,
+}, content)
 
-			if SHOW_INFECTED then
-
-				for model in pairs(
-					trackedNPCs
-				) do
-
-					if model.Parent then
-						setupNPC(model)
-					end
-
-				end
-
-			else
-
-				for model in pairs(
-					trackedNPCs
-				) do
-
-					removeNPCVisuals(
-						model
-					)
-
-				end
-
-			end
-
-			updateButtons()
-
+-- Перетаскивание: InputChanged подключается ТОЛЬКО пока тянем
+local function makeDraggable(handle, frame)
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1
+			and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
 		end
-	)
 
-AlliesButton =
-	createToggle(
-		"",
-		function()
+		local startPos = input.Position
+		local startFramePos = frame.Position
+		local moveConn, endConn
 
-			SHOW_ALLIES =
-				not SHOW_ALLIES
-
-			refreshAllies()
-			updateButtons()
-
-		end
-	)
-
-local Info =
-	Instance.new("TextLabel")
-
-Info.Size =
-	UDim2.new(
-		1,
-		0,
-		0,
-		24
-	)
-
-Info.BackgroundTransparency =
-	1
-
-Info.Text =
-	"ESP Control  •  VNMA0"
-
-Info.TextColor3 =
-	Color3.fromRGB(
-		105,
-		105,
-		115
-	)
-
-Info.TextSize =
-	10
-
-Info.Font =
-	Enum.Font.Gotham
-
-Info.Parent =
-	Content
-
-updateButtons()
-
--- =========================================================
--- DRAG MAIN GUI
--- =========================================================
-
-local function makeDraggable(
-	handle,
-	frame
-)
-
-	local dragging =
-		false
-
-	local dragStart
-	local startPos
-	local dragInput
-
-	handle.InputBegan:Connect(
-		function(input)
-
-			if input.UserInputType ==
-				Enum.UserInputType.MouseButton1
-				or input.UserInputType ==
-				Enum.UserInputType.Touch then
-
-				dragging =
-					true
-
-				dragStart =
-					input.Position
-
-				startPos =
-					frame.Position
-
-				input.Changed:Connect(
-					function()
-
-						if input.UserInputState ==
-							Enum.UserInputState.End then
-
-							dragging =
-								false
-
-						end
-
-					end
+		moveConn = UserInputService.InputChanged:Connect(function(i)
+			if i == input or i.UserInputType == Enum.UserInputType.MouseMovement then
+				local delta = i.Position - startPos
+				frame.Position = UDim2.new(
+					startFramePos.X.Scale, startFramePos.X.Offset + delta.X,
+					startFramePos.Y.Scale, startFramePos.Y.Offset + delta.Y
 				)
-
 			end
+		end)
 
-		end
-	)
-
-	handle.InputChanged:Connect(
-		function(input)
-
-			if input.UserInputType ==
-				Enum.UserInputType.MouseMovement
-				or input.UserInputType ==
-				Enum.UserInputType.Touch then
-
-				dragInput =
-					input
-
+		endConn = input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				moveConn:Disconnect()
+				endConn:Disconnect()
 			end
-
-		end
-	)
-
-	UserInputService.InputChanged:Connect(
-		function(input)
-
-			if input ==
-				dragInput
-				and dragging then
-
-				local delta =
-					input.Position
-					- dragStart
-
-				frame.Position =
-					UDim2.new(
-						startPos.X.Scale,
-						startPos.X.Offset
-							+ delta.X,
-
-						startPos.Y.Scale,
-						startPos.Y.Offset
-							+ delta.Y
-					)
-
-			end
-
-		end
-	)
+		end)
+	end)
 end
 
-makeDraggable(
-	Header,
-	Main
-)
+makeDraggable(header, main)
+
+-- Свёрнутый квадратик
+local mini = new("TextButton", {
+	Name = "Mini",
+	Size = UDim2.fromOffset(50, 50),
+	Position = main.Position,
+	BackgroundColor3 = Color3.fromRGB(22, 22, 28),
+	BorderSizePixel = 0,
+	Text = "V",
+	TextColor3 = Color3.fromRGB(255, 255, 255),
+	TextSize = 20,
+	Font = Enum.Font.GothamBold,
+	Visible = false,
+}, screenGui)
+new("UICorner", { CornerRadius = UDim.new(0, 14) }, mini)
+new("UIStroke", { Color = Color3.fromRGB(90, 90, 105) }, mini)
+
+makeDraggable(mini, mini)
+
+minimize.Activated:Connect(function()
+	mini.Position = main.Position
+	main.Visible = false
+	mini.Visible = true
+end)
+
+mini.Activated:Connect(function()
+	main.Position = mini.Position
+	mini.Visible = false
+	main.Visible = true
+end)
 
 -- =========================================================
--- МАЛЕНЬКИЙ КВАДРАТИК
+-- ПОЛНАЯ ОСТАНОВКА (вызывается при повторном запуске скрипта)
 -- =========================================================
-
-local Mini =
-	Instance.new("TextButton")
-
-Mini.Name =
-	"Mini"
-
-Mini.Size =
-	UDim2.fromOffset(
-		50,
-		50
-	)
-
-Mini.Position =
-	Main.Position
-
-Mini.BackgroundColor3 =
-	Color3.fromRGB(
-		22,
-		22,
-		28
-	)
-
-Mini.BorderSizePixel =
-	0
-
-Mini.Text =
-	"V"
-
-Mini.TextColor3 =
-	Color3.fromRGB(
-		255,
-		255,
-		255
-	)
-
-Mini.TextSize =
-	20
-
-Mini.Font =
-	Enum.Font.GothamBold
-
-Mini.AutoButtonColor =
-	true
-
-Mini.Visible =
-	false
-
-Mini.Parent =
-	ScreenGui
-
-local MiniCorner =
-	Instance.new("UICorner")
-
-MiniCorner.CornerRadius =
-	UDim.new(
-		0,
-		14
-	)
-
-MiniCorner.Parent =
-	Mini
-
-local MiniStroke =
-	Instance.new("UIStroke")
-
-MiniStroke.Color =
-	Color3.fromRGB(
-		90,
-		90,
-		105
-	)
-
-MiniStroke.Thickness =
-	1
-
-MiniStroke.Parent =
-	Mini
-
-makeDraggable(
-	Mini,
-	Mini
-)
-
--- =========================================================
--- MINIMIZE
--- =========================================================
-
-Minimize.Activated:Connect(
-	function()
-
-		Mini.Position =
-			Main.Position
-
-		Main.Visible =
-			false
-
-		Mini.Visible =
-			true
-
+env.VNMA0_ESP_STOP = function()
+	stopped = true
+	for _, c in ipairs(connections) do
+		c:Disconnect()
 	end
-)
-
-Mini.Activated:Connect(
-	function()
-
-		Main.Position =
-			Mini.Position
-
-		Mini.Visible =
-			false
-
-		Main.Visible =
-			true
-
+	for model in pairs(npcs) do
+		dropNPC(model)
 	end
-)
+	for _, vis in pairs(allyVis) do
+		if vis.highlight then vis.highlight:Destroy() end
+		if vis.gui then vis.gui:Destroy() end
+	end
+	screenGui:Destroy()
+end
