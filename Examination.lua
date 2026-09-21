@@ -2554,6 +2554,45 @@ local okGui, errGui = pcall(function()
 		end)
 	end)
 
+	-- БЕЛЫЙ КРУГ FOV AIM (показывает зону работы аим бота)
+	local fovCircle = new("Frame", {
+		Name = "AimFovCircle",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(100, 100),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 5,
+	}, screenGui)
+	corner(fovCircle, 99999)
+	stroke(fovCircle, WHITE, 2, 0.15)
+
+	local function updateFovCircle()
+		if stopped then
+			fovCircle.Visible = false
+			return
+		end
+		if not (CFG.AimPC or CFG.AimMobile) then
+			fovCircle.Visible = false
+			return
+		end
+		local cam = Workspace.CurrentCamera
+		if not cam then
+			fovCircle.Visible = false
+			return
+		end
+		local viewport = cam.ViewportSize
+		local camFovRad = math.rad(cam.FieldOfView)
+		local aimFovRad = math.rad(CFG.AimFOV)
+		local radius = math.tan(aimFovRad / 2) / math.tan(camFovRad / 2) * (viewport.Y / 2)
+		local d = math.max(4, radius * 2)
+		fovCircle.Size = UDim2.fromOffset(d, d)
+		fovCircle.Visible = true
+	end
+
+	bind(RunService.RenderStepped, updateFovCircle)
+
 	-- VISUAL
 	local visual = new("ScrollingFrame", {
 		Name = "Visual",
