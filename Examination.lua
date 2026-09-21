@@ -1640,84 +1640,79 @@ end)
 local Fov = {}
 do
 	local NAME = "VNMA0_FOV"
+	local FOV_PRIORITY = Enum.RenderPriority.Last.Value + 1000
 	local state = {
 		baseline = nil,
-		gameFov = nil,
-		applying = false,
 		cam = nil,
-		conn = nil,
+		camConn = nil,
 	}
 
-	local function onFovChanged()
-		if state.applying then return end
-		if not state.cam then return end
-		if not state.baseline then return end
-		state.gameFov = state.cam.FieldOfView
-	end
-
-	local function attachCam(cam)
-		if state.conn then
-			state.conn:Disconnect()
-			state.conn = nil
+	local function hookCamera(cam)
+		if state.camConn then
+			state.camConn:Disconnect()
+			state.camConn = nil
 		end
 		state.cam = cam
-		if cam then
-			state.conn = cam:GetPropertyChangedSignal("FieldOfView"):Connect(onFovChanged)
-		end
+		state.baseline = nil
+
+		-- Как только игра меняет FOV (прицел / выход из прицела), сразу возвращаем свой
+		state.camConn = cam:GetPropertyChangedSignal("FieldOfView"):Connect(function()
+			if stopped or not CFG.FOVEnabled or state.baseline == nil then return end
+			if cam.FieldOfView ~= CFG.FOV then
+				cam.FieldOfView = CFG.FOV
+			end
+		end)
 	end
 
 	local function step()
+		if stopped then return end
+
 		local cam = Workspace.CurrentCamera
 		if not cam then return end
 
 		if state.cam ~= cam then
+			hookCamera(cam)
+		end
+
+		if not CFG.FOVEnabled then
 			state.baseline = nil
-			state.gameFov = nil
-			attachCam(cam)
+			return
 		end
 
 		if not state.baseline then
 			state.baseline = cam.FieldOfView
-			state.gameFov = cam.FieldOfView
 		end
 
-		if not CFG.FOVEnabled then
-			return
-		end
-
-		local ratio = CFG.FOV / state.baseline
-		local target = math.clamp(state.gameFov * ratio, 1, 120)
-
-		if math.abs(cam.FieldOfView - target) > 0.001 then
-			state.applying = true
-			cam.FieldOfView = target
-			state.applying = false
+		if cam.FieldOfView ~= CFG.FOV then
+			cam.FieldOfView = CFG.FOV
 		end
 	end
 
 	function Fov.start()
 		pcall(function()
 			RunService:UnbindFromRenderStep(NAME)
-			RunService:BindToRenderStep(NAME, Enum.RenderPriority.Last.Value, step)
+			RunService:BindToRenderStep(NAME, FOV_PRIORITY, step)
 		end)
+		bind(RunService.RenderStepped, step)
+		bind(RunService.Heartbeat, step)
+		bind(Workspace:GetPropertyChangedSignal("CurrentCamera"), step)
 	end
 
 	function Fov.restore()
 		local cam = state.cam
-		if cam and state.gameFov then
-			state.applying = true
-			cam.FieldOfView = state.gameFov
-			state.applying = false
+		if cam and state.baseline then
+			cam.FieldOfView = state.baseline
 		end
+		state.baseline = nil
 	end
 
 	function Fov.stop()
 		pcall(function() RunService:UnbindFromRenderStep(NAME) end)
-		if state.conn then
-			state.conn:Disconnect()
-			state.conn = nil
-		end
 		Fov.restore()
+		if state.camConn then
+			state.camConn:Disconnect()
+			state.camConn = nil
+		end
 	end
 end
 
@@ -2281,18 +2276,18 @@ do
 	createToggle(visual, 2, "Заражённые", "ShowInfected")
 	createToggle(visual, 3, "Союзники", "ShowAllies")
 
-	sectionTitle(visual, 4, "| [Tunnel]")
-	createToggle(visual, 5, "Показать ключ-карту", "ShowCards", function()
+	sectionTitle(visual, 4, "| Окружение")
+	createToggle(visual, 5, "Нет тумана", "NoFog", Light.applyFog)
+	createToggle(visual, 6, "Без темноты", "NoDark", Light.applyDark)
+
+	sectionTitle(visual, 7, "| [Tunnel]")
+	createToggle(visual, 8, "Показать ключ-карту", "ShowCards", function()
 		if CFG.ShowCards then pcall(Items.resolveDoors) end
 	end)
-	createToggle(visual, 6, "Показать двери и терминалы", "ShowDoors", function()
+	createToggle(visual, 9, "Показать двери и терминалы", "ShowDoors", function()
 		if CFG.ShowDoors then pcall(Items.resolveDoors) end
 	end)
-	hint(visual, 7, "Двери: красная, синяя, жёлтая. Терминалы — по цвету нужной карты.")
-
-	sectionTitle(visual, 8, "| Окружение")
-	createToggle(visual, 9, "Нет тумана", "NoFog", Light.applyFog)
-	createToggle(visual, 10, "Без темноты", "NoDark", Light.applyDark)
+	hint(visual, 10, "Двери: красная, синяя, жёлтая. Терминалы — по цвету нужной карты.")
 
 	-- СОЦ СЕТИ
 	local social = new("Frame", {
