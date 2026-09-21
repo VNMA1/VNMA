@@ -1,5 +1,19 @@
 print("[VNMA-SCRIPT] loading...")
 
+-- показывает ошибку в консоли и уведомлением на экране (видно и на телефоне)
+local function reportError(where, err)
+	warn("[VNMA-SCRIPT] ERROR (" .. tostring(where) .. "): " .. tostring(err))
+	pcall(function()
+		game:GetService("StarterGui"):SetCore("SendNotification", {
+			Title = "VNMA-SCRIPT: ошибка",
+			Text = string.sub(tostring(where) .. ": " .. tostring(err), 1, 180),
+			Duration = 15,
+		})
+	end)
+end
+
+local function main()
+
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
@@ -34,6 +48,16 @@ local function bind(signal, fn)
 	return c
 end
 
+-- временная остановка (на случай ошибки при запуске), полная версия ниже перезапишет её
+if type(env) == "table" then
+	env.VNMA0_ESP_STOP = function()
+		stopped = true
+		for _, c in ipairs(connections) do
+			pcall(function() c:Disconnect() end)
+		end
+	end
+end
+
 -- =========================================================
 -- НАСТРОЙКИ
 -- =========================================================
@@ -47,6 +71,17 @@ local CFG = {
 	NoDark = false,
 	FOVEnabled = false,
 	FOV = 90,
+
+	-- AIM BOT
+	AimEnabled = false,   -- аим всегда включён (старый переключатель)
+	AimPC = false,        -- режим ПК: аим работает, пока зажата ПКМ
+	AimPCHold = true,     -- true = держать ПКМ, false = ПКМ включает/выключает
+	AimMobile = false,    -- круглая кнопка AIM на экране (телефон)
+	AimFOV = 20,          -- угол захвата (градусы). Меньше = незаметнее
+	AimSmooth = 0.12,     -- 0.05 очень мягко ... 1 жёстко
+	AimDistance = 150,
+	AimWallCheck = true,
+	AimPart = "Head",     -- "Head" или "HumanoidRootPart"
 
 	MaxDistance = 500,
 	ItemDistance = 600,
@@ -752,6 +787,11 @@ do
 		for model in pairs(npcs) do
 			dropNPC(model)
 		end
+	end
+
+	-- список целей для Aim Bot
+	function Npc.targets()
+		return npcs
 	end
 end
 
@@ -1717,6 +1757,118 @@ do
 end
 
 -- =========================================================
+-- AIM BOT (мягкая наводка на заражённых)
+-- =========================================================
+local Aim = {}
+do
+	local NAME = "VNMA0_AIM"
+
+	local rayParams = RaycastParams.new()
+	pcall(function() rayParams.FilterType = Enum.RaycastFilterType.Exclude end)
+	pcall(function() rayParams.RespectCanCollide = true end)
+
+	Aim.mobileOn = false      -- состояние круглой кнопки AIM (телефон)
+	local pcToggled = false   -- состояние для режима "ПКМ включает/выключает"
+
+	function Aim.resetPC()
+		pcToggled = false
+	end
+
+	-- ПК: ПКМ (держать или переключать)
+	bind(UserInputService.InputBegan, function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton2 then return end
+		if not CFG.AimPC or CFG.AimPCHold then return end
+		if UserInputService:GetFocusedTextBox() then return end
+		pcToggled = not pcToggled
+	end)
+
+	local function pcActive()
+		if not CFG.AimPC then return false end
+		if CFG.AimPCHold then
+			return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+		end
+		return pcToggled
+	end
+
+	local function isActive()
+		return CFG.AimEnabled
+			or (CFG.AimMobile and Aim.mobileOn)
+			or pcActive()
+	end
+
+	local function pickPart(e)
+		local m = e.model
+		return m:FindFirstChild(CFG.AimPart) or m:FindFirstChild("Head") or getRoot(m)
+	end
+
+	local function visible(cam, part, model)
+		local ignore = { cam, model }
+		local char = LocalPlayer.Character
+		if char then ignore[#ignore + 1] = char end
+		rayParams.FilterDescendantsInstances = ignore
+		local origin = cam.CFrame.Position
+		return Workspace:Raycast(origin, part.Position - origin, rayParams) == nil
+	end
+
+	local function findTarget(cam)
+		local camCF = cam.CFrame
+		local look = camCF.LookVector
+		local best, bestAngle
+
+		for model, e in pairs(Npc.targets()) do
+			local hum = e.humanoid
+			if model.Parent and hum and hum.Parent and hum.Health > 0 then
+				local part = pickPart(e)
+				if part and part.Parent then
+					local offset = part.Position - camCF.Position
+					local dist = offset.Magnitude
+					if dist > 3 and dist <= CFG.AimDistance then
+						local angle = math.deg(math.acos(math.clamp(look:Dot(offset.Unit), -1, 1)))
+						if angle <= CFG.AimFOV and (not bestAngle or angle < bestAngle) then
+							if not CFG.AimWallCheck or visible(cam, part, model) then
+								best, bestAngle = part, angle
+							end
+						end
+					end
+				end
+			end
+		end
+
+		return best
+	end
+
+	local function step(dt)
+		if stopped or not isActive() then return end
+		local cam = Workspace.CurrentCamera
+		if not cam then return end
+
+		local part = findTarget(cam)
+		if not part then return end
+
+		local cf = cam.CFrame
+		local goal = CFrame.lookAt(cf.Position, part.Position)
+		local alpha = math.clamp(CFG.AimSmooth * dt * 60, 0, 1)
+		cam.CFrame = cf:Lerp(goal, alpha)
+	end
+
+	function Aim.start()
+		pcall(function()
+			RunService:UnbindFromRenderStep(NAME)
+		end)
+		RunService:BindToRenderStep(NAME, Enum.RenderPriority.Camera.Value + 1, step)
+	end
+
+	function Aim.stop()
+		CFG.AimEnabled = false
+		CFG.AimPC = false
+		CFG.AimMobile = false
+		Aim.mobileOn = false
+		pcToggled = false
+		pcall(function() RunService:UnbindFromRenderStep(NAME) end)
+	end
+end
+
+-- =========================================================
 -- ГЛАВНЫЙ ЦИКЛ
 -- =========================================================
 local function step()
@@ -1766,14 +1918,20 @@ bind(RunService.Heartbeat, function(dt)
 	end
 end)
 
-Fov.start()
+do
+	local okF, errF = pcall(Fov.start)
+	if not okF then reportError("FOV", errF) end
+
+	local okA, errA = pcall(Aim.start)
+	if not okA then reportError("AIM", errA) end
+end
 print("[VNMA-SCRIPT] core started")
 
 -- =========================================================
 -- GUI
 -- =========================================================
 local screenGui
-do
+local okGui, errGui = pcall(function()
 	local C = {
 		bg = Color3.fromRGB(9, 9, 11),
 		panel = Color3.fromRGB(18, 18, 22),
@@ -1808,6 +1966,15 @@ do
 	end
 
 	local playerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+	if not playerGui then
+		-- запасной вариант, если PlayerGui не найден
+		local okH, hui = pcall(function()
+			return gethui and gethui()
+		end)
+		if okH and typeof(hui) == "Instance" then
+			playerGui = hui
+		end
+	end
 	if not playerGui then
 		warn("[VNMA-SCRIPT] PlayerGui not found")
 		return
@@ -2012,6 +2179,69 @@ do
 		return row, refresh
 	end
 
+	-- строка со значением и кнопками  -  /  +
+	local function createStepper(parent, order, text, key, minV, maxV, stepV, fmt)
+		local row = new("Frame", {
+			Size = UDim2.new(1, 0, 0, 36),
+			BackgroundColor3 = C.panel,
+			BorderSizePixel = 0,
+			LayoutOrder = order,
+		}, parent)
+		corner(row, 9)
+		stroke(row, C.line, 1, 0)
+
+		new("TextLabel", {
+			Size = UDim2.new(1, -120, 1, 0),
+			Position = UDim2.fromOffset(12, 0),
+			BackgroundTransparency = 1,
+			Text = text,
+			TextSize = 13,
+			Font = Enum.Font.GothamSemibold,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextColor3 = C.text,
+		}, row)
+
+		local valueLabel = new("TextLabel", {
+			Size = UDim2.fromOffset(46, 36),
+			Position = UDim2.new(1, -84, 0, 0),
+			BackgroundTransparency = 1,
+			TextSize = 12,
+			Font = Enum.Font.GothamBold,
+			TextColor3 = C.orange,
+		}, row)
+
+		local function refresh()
+			valueLabel.Text = string.format(fmt, CFG[key])
+		end
+		refresh()
+
+		local function makeBtn(txt, x, delta)
+			local b = new("TextButton", {
+				Size = UDim2.fromOffset(22, 22),
+				Position = UDim2.new(1, x, 0.5, -11),
+				BackgroundColor3 = C.off,
+				BorderSizePixel = 0,
+				Text = txt,
+				TextColor3 = C.text,
+				TextSize = 15,
+				Font = Enum.Font.GothamBold,
+				AutoButtonColor = true,
+			}, row)
+			corner(b, 6)
+			b.Activated:Connect(function()
+				local v = CFG[key] + delta
+				v = math.floor(v / stepV + 0.5) * stepV
+				CFG[key] = math.clamp(v, minV, maxV)
+				refresh()
+			end)
+		end
+
+		makeBtn("-", -112, -stepV)
+		makeBtn("+", -32, stepV)
+
+		return row
+	end
+
 	local function sectionTitle(parent, order, text)
 		return new("TextLabel", {
 			Size = UDim2.new(1, 0, 0, 20),
@@ -2025,9 +2255,9 @@ do
 		}, parent)
 	end
 
-	local function hint(parent, order, text)
+	local function hint(parent, order, text, height)
 		return new("TextLabel", {
-			Size = UDim2.new(1, 0, 0, 26),
+			Size = UDim2.new(1, 0, 0, height or 26),
 			BackgroundTransparency = 1,
 			Text = text,
 			TextColor3 = C.muted,
@@ -2255,6 +2485,77 @@ do
 		end)
 	end)
 
+	-- КРУГЛАЯ КНОПКА AIM (mobile): зелёная = включён, красная = выключен, двигается пальцем
+	local AIM_GREEN = Color3.fromRGB(46, 204, 90)
+	local AIM_RED = Color3.fromRGB(220, 55, 55)
+
+	local mobileBtn = new("TextButton", {
+		Name = "AimMobileButton",
+		Size = UDim2.fromOffset(64, 64),
+		Position = UDim2.new(1, -100, 0.55, 0),
+		BackgroundColor3 = AIM_RED,
+		BorderSizePixel = 0,
+		Text = "AIM",
+		TextColor3 = WHITE,
+		TextSize = 16,
+		Font = Enum.Font.GothamBold,
+		AutoButtonColor = false,
+		Visible = false,
+		ZIndex = 10,
+	}, screenGui)
+	corner(mobileBtn, 32)
+	stroke(mobileBtn, WHITE, 2, 0.1)
+
+	local function paintMobileBtn()
+		mobileBtn.BackgroundColor3 = Aim.mobileOn and AIM_GREEN or AIM_RED
+	end
+
+	local function updateMobileButton()
+		if not CFG.AimMobile then
+			Aim.mobileOn = false
+		end
+		mobileBtn.Visible = CFG.AimMobile
+		paintMobileBtn()
+	end
+
+	mobileBtn.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.Touch
+			and input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+			return
+		end
+
+		local startPos = input.Position
+		local startFramePos = mobileBtn.Position
+		local dragged = false
+		local moveConn, endConn
+
+		moveConn = UserInputService.InputChanged:Connect(function(i)
+			if i == input or i.UserInputType == Enum.UserInputType.MouseMovement then
+				local delta = i.Position - startPos
+				if not dragged and delta.Magnitude > 8 then
+					dragged = true
+				end
+				if dragged then
+					mobileBtn.Position = UDim2.new(
+						startFramePos.X.Scale, startFramePos.X.Offset + delta.X,
+						startFramePos.Y.Scale, startFramePos.Y.Offset + delta.Y
+					)
+				end
+			end
+		end)
+
+		endConn = input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				moveConn:Disconnect()
+				endConn:Disconnect()
+				if not dragged then
+					Aim.mobileOn = not Aim.mobileOn
+					paintMobileBtn()
+				end
+			end
+		end)
+	end)
+
 	-- VISUAL
 	local visual = new("ScrollingFrame", {
 		Name = "Visual",
@@ -2276,18 +2577,27 @@ do
 	createToggle(visual, 2, "Заражённые", "ShowInfected")
 	createToggle(visual, 3, "Союзники", "ShowAllies")
 
-	sectionTitle(visual, 4, "| Окружение")
-	createToggle(visual, 5, "Нет тумана", "NoFog", Light.applyFog)
-	createToggle(visual, 6, "Без темноты", "NoDark", Light.applyDark)
+	sectionTitle(visual, 4, "| AIM BOT")
+	createToggle(visual, 5, "Аим на заражённых", "AimEnabled")
+	createToggle(visual, 6, "AIM PC", "AimPC", Aim.resetPC)
+	createToggle(visual, 7, "AIM (mobile)", "AimMobile", updateMobileButton)
+	createToggle(visual, 8, "Проверка стен", "AimWallCheck")
+	createStepper(visual, 9, "Угол захвата", "AimFOV", 5, 60, 5, "%d°")
+	createStepper(visual, 10, "Плавность", "AimSmooth", 0.05, 1, 0.05, "%.2f")
+	hint(visual, 11, "ПК: включи AIM PC и держи правую кнопку мыши. Телефон: включи AIM (mobile) - появится круглая кнопка AIM (зелёная = вкл, красная = выкл), её можно двигать пальцем.", 52)
 
-	sectionTitle(visual, 7, "| [Tunnel]")
-	createToggle(visual, 8, "Показать ключ-карту", "ShowCards", function()
+	sectionTitle(visual, 12, "| Окружение")
+	createToggle(visual, 13, "Нет тумана", "NoFog", Light.applyFog)
+	createToggle(visual, 14, "Без темноты", "NoDark", Light.applyDark)
+
+	sectionTitle(visual, 15, "| [Tunnel]")
+	createToggle(visual, 16, "Показать ключ-карту", "ShowCards", function()
 		if CFG.ShowCards then pcall(Items.resolveDoors) end
 	end)
-	createToggle(visual, 9, "Показать двери и терминалы", "ShowDoors", function()
+	createToggle(visual, 17, "Показать двери и терминалы", "ShowDoors", function()
 		if CFG.ShowDoors then pcall(Items.resolveDoors) end
 	end)
-	hint(visual, 10, "Двери: красная, синяя, жёлтая. Терминалы — по цвету нужной карты.")
+	hint(visual, 18, "Двери: красная, синяя, жёлтая. Терминалы — по цвету нужной карты.")
 
 	-- СОЦ СЕТИ
 	local social = new("Frame", {
@@ -2432,9 +2742,13 @@ do
 	end)
 
 	selectTab("home")
-end
+end)
 
-print("[VNMA-SCRIPT] GUI created")
+if okGui then
+	print("[VNMA-SCRIPT] GUI created")
+else
+	reportError("GUI", errGui)
+end
 
 -- =========================================================
 -- ПОЛНАЯ ОСТАНОВКА
@@ -2445,6 +2759,7 @@ if type(env) == "table" then
 
 		pcall(Light.restoreAll)
 		pcall(Fov.stop)
+		pcall(Aim.stop)
 
 		for _, c in ipairs(connections) do
 			c:Disconnect()
@@ -2461,3 +2776,12 @@ if type(env) == "table" then
 end
 
 print("[VNMA-SCRIPT] ready")
+
+end -- main
+
+local okMain, errMain = xpcall(main, function(e)
+	return debug.traceback(tostring(e), 2)
+end)
+if not okMain then
+	reportError("запуск", errMain)
+end
