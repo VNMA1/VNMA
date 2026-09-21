@@ -73,10 +73,9 @@ local CFG = {
 	FOV = 90,
 
 	-- AIM BOT
-	AimEnabled = false,   -- аим всегда включён (старый переключатель)
-	AimPC = false,        -- режим ПК: аим работает, пока зажата ПКМ
+	AimPC = false,        -- [AIM PC]: аим работает, пока зажата ПКМ
 	AimPCHold = true,     -- true = держать ПКМ, false = ПКМ включает/выключает
-	AimMobile = false,    -- круглая кнопка AIM на экране (телефон)
+	AimMobile = false,    -- [AIM MB]: круглая кнопка AIM на экране (телефон)
 	AimFOV = 20,          -- угол захвата (градусы). Меньше = незаметнее
 	AimSmooth = 0.12,     -- 0.05 очень мягко ... 1 жёстко
 	AimDistance = 150,
@@ -1791,8 +1790,7 @@ do
 	end
 
 	local function isActive()
-		return CFG.AimEnabled
-			or (CFG.AimMobile and Aim.mobileOn)
+		return (CFG.AimMobile and Aim.mobileOn)
 			or pcActive()
 	end
 
@@ -1859,7 +1857,6 @@ do
 	end
 
 	function Aim.stop()
-		CFG.AimEnabled = false
 		CFG.AimPC = false
 		CFG.AimMobile = false
 		Aim.mobileOn = false
@@ -2111,7 +2108,8 @@ local okGui, errGui = pcall(function()
 
 	createTab(1, "home", "Главная")
 	createTab(2, "visual", "Visual")
-	createTab(3, "social", "Соц сети")
+	createTab(3, "aim", "AIM BOT")
+	createTab(4, "social", "Соц сети")
 
 	local function createToggle(parent, order, text, key, onChange, height)
 		local row = new("TextButton", {
@@ -2577,27 +2575,46 @@ local okGui, errGui = pcall(function()
 	createToggle(visual, 2, "Заражённые", "ShowInfected")
 	createToggle(visual, 3, "Союзники", "ShowAllies")
 
-	sectionTitle(visual, 4, "| AIM BOT")
-	createToggle(visual, 5, "Аим на заражённых", "AimEnabled")
-	createToggle(visual, 6, "AIM PC", "AimPC", Aim.resetPC)
-	createToggle(visual, 7, "AIM (mobile)", "AimMobile", updateMobileButton)
-	createToggle(visual, 8, "Проверка стен", "AimWallCheck")
-	createStepper(visual, 9, "Угол захвата", "AimFOV", 5, 60, 5, "%d°")
-	createStepper(visual, 10, "Плавность", "AimSmooth", 0.05, 1, 0.05, "%.2f")
-	hint(visual, 11, "ПК: включи AIM PC и держи правую кнопку мыши. Телефон: включи AIM (mobile) - появится круглая кнопка AIM (зелёная = вкл, красная = выкл), её можно двигать пальцем.", 52)
+	sectionTitle(visual, 4, "| Окружение")
+	createToggle(visual, 5, "Нет тумана", "NoFog", Light.applyFog)
+	createToggle(visual, 6, "Без темноты", "NoDark", Light.applyDark)
 
-	sectionTitle(visual, 12, "| Окружение")
-	createToggle(visual, 13, "Нет тумана", "NoFog", Light.applyFog)
-	createToggle(visual, 14, "Без темноты", "NoDark", Light.applyDark)
-
-	sectionTitle(visual, 15, "| [Tunnel]")
-	createToggle(visual, 16, "Показать ключ-карту", "ShowCards", function()
+	sectionTitle(visual, 7, "| [Tunnel]")
+	createToggle(visual, 8, "Показать ключ-карту", "ShowCards", function()
 		if CFG.ShowCards then pcall(Items.resolveDoors) end
 	end)
-	createToggle(visual, 17, "Показать двери и терминалы", "ShowDoors", function()
+	createToggle(visual, 9, "Показать двери и терминалы", "ShowDoors", function()
 		if CFG.ShowDoors then pcall(Items.resolveDoors) end
 	end)
-	hint(visual, 18, "Двери: красная, синяя, жёлтая. Терминалы — по цвету нужной карты.")
+	hint(visual, 10, "Двери: красная, синяя, жёлтая. Терминалы — по цвету нужной карты.")
+
+	-- AIM BOT (отдельная ветка)
+	local aim = new("ScrollingFrame", {
+		Name = "AimBot",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = C.orange,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Visible = false,
+	}, pagesHolder)
+	pages.aim = aim
+
+	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, aim)
+	new("UIPadding", { PaddingRight = UDim.new(0, 8), PaddingBottom = UDim.new(0, 6) }, aim)
+
+	sectionTitle(aim, 1, "| AIM BOT")
+	createToggle(aim, 2, "[AIM PC]", "AimPC", Aim.resetPC)
+	createToggle(aim, 3, "[AIM MB]", "AimMobile", updateMobileButton)
+	hint(aim, 4, "ПК: включи [AIM PC] и держи правую кнопку мыши. Телефон: включи [AIM MB] - на экране появится круглая кнопка AIM (зелёная = вкл, красная = выкл), её можно двигать пальцем.", 52)
+
+	sectionTitle(aim, 5, "| [настройки AIM BOT]")
+	createToggle(aim, 6, "Проверка стен", "AimWallCheck")
+	createStepper(aim, 7, "Угол захвата", "AimFOV", 5, 60, 5, "%d°")
+	createStepper(aim, 8, "Плавность", "AimSmooth", 0.05, 1, 0.05, "%.2f")
+	hint(aim, 9, "Меньше плавность = мягче и незаметнее. Аим целится в заражённых рядом с центром экрана.", 40)
 
 	-- СОЦ СЕТИ
 	local social = new("Frame", {
