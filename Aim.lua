@@ -161,17 +161,19 @@ local function buildDefaultCFG()
 		NoDark = false,
 
 		-- MISC PLAYER
-		WalkSpeed = 16,
-		JumpPower = 50,
+		WalkSpeedEnabled = false, -- выключено по умолчанию, чтобы не менять скорость сразу при запуске
+		WalkSpeed = 16,           -- будет заменено на базовое значение плейса при старте
+		JumpPowerEnabled = false, -- выключено по умолчанию, чтобы не менять прыжок сразу при запуске
+		JumpPower = 50,           -- будет заменено на базовое значение плейса при старте
 		InfiniteJump = false,
 		AntiAFK = false,
 		ShowFPSPing = false,
 
-		-- КЕЙБИНДЫ
-		KeyAim = "Q",
-		KeyESP = "E",
-		KeyFriends = "F",
-		KeyMenu = "RightControl",
+		-- КЕЙБИНДЫ (по умолчанию не назначены, кроме открытия/закрытия меню)
+		KeyAim = "",
+		KeyESP = "",
+		KeyFriends = "",
+		KeyMenu = "RightShift",
 	}
 end
 
@@ -264,13 +266,16 @@ L.RU = {
 
 	misc_warning = "ВНИМАНИЕ: эти функции могут привести к бану во многих плейсах. Используй на свой страх и риск!",
 	misc_sec_char = "| Персонаж",
-	misc_walkspeed = "WalkSpeed",
-	misc_jumppower = "JumpPower",
+	misc_walkspeed_enable = "Скорость Вкл/Выкл",
+	misc_walkspeed = "Скорость",
+	misc_jumppower_enable = "Прыжок Вкл/Выкл",
+	misc_jumppower = "Прыжок",
 	misc_infjump = "Infinite Jump",
 	misc_antiafk = "Anti-AFK",
 	misc_sec_screen = "| Экран",
 	misc_fpsping = "FPS / Ping",
 	misc_reset_btn = "СБРОС НАСТРОЕК ИГРОКА",
+	misc_speed_jump_hint = "Пока переключатель выключен, скорость/прыжок остаются как в самой игре и не применяются.",
 
 	save_sec = "| Файл настроек",
 	save_btn = "СОХРАНИТЬ НАСТРОЙКИ",
@@ -283,11 +288,13 @@ L.RU = {
 	logs_clear_btn = "ОЧИСТИТЬ ЛОГ",
 
 	keybinds_sec = "| Горячие клавиши",
+	keybinds_hint = "По умолчанию клавиши не назначены — задай их сам, нажав на поле и затем на нужную клавишу. Открытие/закрытие меню по умолчанию — правый Shift.",
 	key_toggle_aim = "Toggle AIM",
 	key_toggle_esp = "Toggle ESP",
 	key_friend_target = "Друг под прицелом",
 	key_menu_toggle = "Открыть/закрыть меню",
 	keybinds_reset_btn = "СБРОСИТЬ КЕЙБИНДЫ",
+	key_not_set = "Не назначено",
 
 	social_sec = "| Создатель и соцсети",
 	social_creator = "СОЗДАТЕЛЬ",
@@ -369,13 +376,16 @@ L.US = {
 
 	misc_warning = "WARNING: these functions may get you banned in many places. Use at your own risk!",
 	misc_sec_char = "| Character",
+	misc_walkspeed_enable = "WalkSpeed On/Off",
 	misc_walkspeed = "WalkSpeed",
+	misc_jumppower_enable = "JumpPower On/Off",
 	misc_jumppower = "JumpPower",
 	misc_infjump = "Infinite Jump",
 	misc_antiafk = "Anti-AFK",
 	misc_sec_screen = "| Screen",
 	misc_fpsping = "FPS / Ping",
 	misc_reset_btn = "RESET PLAYER SETTINGS",
+	misc_speed_jump_hint = "While the toggle is off, speed/jump stay as they are in the game and are not applied.",
 
 	save_sec = "| Settings file",
 	save_btn = "SAVE SETTINGS",
@@ -388,11 +398,13 @@ L.US = {
 	logs_clear_btn = "CLEAR LOG",
 
 	keybinds_sec = "| Hotkeys",
+	keybinds_hint = "No keys are bound by default — click a field, then press the key you want. Menu open/close defaults to Right Shift.",
 	key_toggle_aim = "Toggle AIM",
 	key_toggle_esp = "Toggle ESP",
 	key_friend_target = "Friend under crosshair",
 	key_menu_toggle = "Open/close menu",
 	keybinds_reset_btn = "RESET KEYBINDS",
+	key_not_set = "Not set",
 
 	social_sec = "| Creator & socials",
 	social_creator = "CREATOR",
@@ -1067,18 +1079,39 @@ end)
 -- =========================================================
 -- MISC PLAYER
 -- =========================================================
-local function applyMisc()
+-- захватываем базовые значения скорости/прыжка плейса, пока переключатели выключены
+do
 	local char = LocalPlayer.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	if hum then
+		if not CFG.WalkSpeedEnabled then CFG.WalkSpeed = hum.WalkSpeed end
+		if not CFG.JumpPowerEnabled then CFG.JumpPower = hum.JumpPower end
+	end
+end
+
+local function applyMisc()
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+	-- скорость и прыжок применяются только если явно включены — иначе плейс не трогается
+	if CFG.WalkSpeedEnabled then
 		hum.WalkSpeed = CFG.WalkSpeed
+	end
+	if CFG.JumpPowerEnabled then
 		hum.JumpPower = CFG.JumpPower
 	end
 end
 
-bind(LocalPlayer.CharacterAdded, function()
+bind(LocalPlayer.CharacterAdded, function(char)
+	local hum = char:WaitForChild("Humanoid", 5)
 	task.wait(0.2)
+	if hum then
+		-- при каждом респавне подхватываем базовые значения плейса, если наши переключатели выключены
+		if not CFG.WalkSpeedEnabled then CFG.WalkSpeed = hum.WalkSpeed end
+		if not CFG.JumpPowerEnabled then CFG.JumpPower = hum.JumpPower end
+	end
 	applyMisc()
+	refreshAllUI()
 end)
 
 bind(RunService.Heartbeat, function()
@@ -1104,12 +1137,20 @@ bind(LocalPlayer.Idled, function()
 end)
 
 local function resetMisc()
-	CFG.WalkSpeed = DEFAULT_CFG.WalkSpeed
-	CFG.JumpPower = DEFAULT_CFG.JumpPower
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	CFG.WalkSpeedEnabled = false
+	CFG.JumpPowerEnabled = false
+	if hum then
+		CFG.WalkSpeed = hum.WalkSpeed
+		CFG.JumpPower = hum.JumpPower
+	else
+		CFG.WalkSpeed = DEFAULT_CFG.WalkSpeed
+		CFG.JumpPower = DEFAULT_CFG.JumpPower
+	end
 	CFG.InfiniteJump = false
 	CFG.AntiAFK = false
 	CFG.ShowFPSPing = false
-	applyMisc()
 	refreshAllUI()
 	Logs.add("misc player reset")
 end
@@ -1601,6 +1642,7 @@ local okGui, errGui = pcall(function()
 	-- ===================== КЕЙБИНДЫ =====================
 	local keybindsPage = makeScrollPage("Keybinds", "keybinds")
 	sectionTitle(keybindsPage, 1, "keybinds_sec")
+	hint(keybindsPage, 2, "keybinds_hint", 34)
 
 	local capturingKey = nil
 
@@ -1610,9 +1652,15 @@ local okGui, errGui = pcall(function()
 		stroke(row, C.line, 1, 0)
 		local label = new("TextLabel", { Size = UDim2.new(1, -108, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1, Text = T(labelKey), TextSize = 12, Font = Enum.Font.GothamSemibold, TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = C.text, TextTruncate = Enum.TextTruncate.AtEnd }, row)
 		loc(label, labelKey)
-		local btn = new("TextButton", { Size = UDim2.fromOffset(88, 24), Position = UDim2.new(1, -98, 0.5, -12), BackgroundColor3 = C.off, BorderSizePixel = 0, Text = CFG[cfgKey], TextColor3 = C.orange, TextSize = 11, Font = Enum.Font.GothamBold }, row)
+		local btn = new("TextButton", { Size = UDim2.fromOffset(88, 24), Position = UDim2.new(1, -98, 0.5, -12), BackgroundColor3 = C.off, BorderSizePixel = 0, Text = (CFG[cfgKey] ~= "" and CFG[cfgKey] or T("key_not_set")), TextColor3 = C.orange, TextSize = 11, Font = Enum.Font.GothamBold, TextTruncate = Enum.TextTruncate.AtEnd }, row)
 		corner(btn, 6)
-		local function refresh() btn.Text = capturingKey == cfgKey and "..." or CFG[cfgKey] end
+		local function refresh()
+			if capturingKey == cfgKey then
+				btn.Text = "..."
+			else
+				btn.Text = (CFG[cfgKey] ~= "" and CFG[cfgKey] or T("key_not_set"))
+			end
+		end
 		table.insert(uiRefreshers, refresh)
 		btn.Activated:Connect(function()
 			capturingKey = cfgKey
@@ -1621,12 +1669,12 @@ local okGui, errGui = pcall(function()
 		return refresh
 	end
 
-	bindRow(2, "key_toggle_aim", "KeyAim")
-	bindRow(3, "key_toggle_esp", "KeyESP")
-	bindRow(4, "key_friend_target", "KeyFriends")
-	bindRow(5, "key_menu_toggle", "KeyMenu")
+	bindRow(3, "key_toggle_aim", "KeyAim")
+	bindRow(4, "key_toggle_esp", "KeyESP")
+	bindRow(5, "key_friend_target", "KeyFriends")
+	bindRow(6, "key_menu_toggle", "KeyMenu")
 
-	bigButton(keybindsPage, 6, "keybinds_reset_btn", function()
+	bigButton(keybindsPage, 7, "keybinds_reset_btn", function()
 		CFG.KeyAim = DEFAULT_CFG.KeyAim
 		CFG.KeyESP = DEFAULT_CFG.KeyESP
 		CFG.KeyFriends = DEFAULT_CFG.KeyFriends
@@ -1664,17 +1712,17 @@ local okGui, errGui = pcall(function()
 
 		if gpe then return end
 
-		if kc == CFG.KeyMenu then
+		if CFG.KeyMenu ~= "" and kc == CFG.KeyMenu then
 			if main.Visible then doMinimize() else doRestore() end
-		elseif kc == CFG.KeyAim then
+		elseif CFG.KeyAim ~= "" and kc == CFG.KeyAim then
 			CFG.AimPC = not CFG.AimPC
 			Logs.add(CFG.AimPC and T("log_aim_on") or T("log_aim_off"))
 			refreshAllUI()
-		elseif kc == CFG.KeyESP then
+		elseif CFG.KeyESP ~= "" and kc == CFG.KeyESP then
 			CFG.EspEnabled = not CFG.EspEnabled
 			Logs.add(CFG.EspEnabled and T("log_esp_on") or T("log_esp_off"))
 			refreshAllUI()
-		elseif kc == CFG.KeyFriends then
+		elseif CFG.KeyFriends ~= "" and kc == CFG.KeyFriends then
 			local targeted = Aim.getTargetedPlayer()
 			if targeted then toggleFriend(targeted) end
 		end
@@ -1716,15 +1764,18 @@ local okGui, errGui = pcall(function()
 	hint(miscPage, 1, "misc_warning", 40, C.warn)
 
 	sectionTitle(miscPage, 2, "misc_sec_char")
-	createStepper(miscPage, 3, "misc_walkspeed", "WalkSpeed", 16, 200, 2, "%d", applyMisc)
-	createStepper(miscPage, 4, "misc_jumppower", "JumpPower", 50, 500, 10, "%d", applyMisc)
-	createToggle(miscPage, 5, "misc_infjump", "InfiniteJump")
-	createToggle(miscPage, 6, "misc_antiafk", "AntiAFK")
+	createToggle(miscPage, 3, "misc_walkspeed_enable", "WalkSpeedEnabled")
+	createStepper(miscPage, 4, "misc_walkspeed", "WalkSpeed", 16, 200, 2, "%d")
+	createToggle(miscPage, 5, "misc_jumppower_enable", "JumpPowerEnabled")
+	createStepper(miscPage, 6, "misc_jumppower", "JumpPower", 50, 500, 10, "%d")
+	hint(miscPage, 7, "misc_speed_jump_hint", 28)
+	createToggle(miscPage, 8, "misc_infjump", "InfiniteJump")
+	createToggle(miscPage, 9, "misc_antiafk", "AntiAFK")
 
-	sectionTitle(miscPage, 7, "misc_sec_screen")
-	createToggle(miscPage, 8, "misc_fpsping", "ShowFPSPing")
+	sectionTitle(miscPage, 10, "misc_sec_screen")
+	createToggle(miscPage, 11, "misc_fpsping", "ShowFPSPing")
 
-	bigButton(miscPage, 9, "misc_reset_btn", resetMisc)
+	bigButton(miscPage, 12, "misc_reset_btn", resetMisc)
 
 	local fpsLabel = new("TextLabel", {
 		Name = "FPSPing", Size = UDim2.fromOffset(120, 40), Position = UDim2.fromOffset(8, 8),
